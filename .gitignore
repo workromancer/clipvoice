@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Swift / Xcode
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+*.xcuserstate
+*.moved-aside
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+xcuserdata/
+
+# Build & Distribution artifacts
+build/
+dist/
+*.app/
+*.dmg
+*.zip
+*.tar.gz
+
+# Local test & runtime state
+.clipvoice-test/
+*.log
+tmp/

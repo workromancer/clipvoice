@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "clipvoice": {
+      "command": "/Applications/ClipVoice.app/Contents/MacOS/clipvoice-mcp",
+      "args": []
+    }
+  }
+}

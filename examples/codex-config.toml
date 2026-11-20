@@ -1,0 +1,4 @@
+# Example Codex / TOML MCP server entry (~/.codex/config.toml)
+[mcp_servers.clipvoice]
+command = "/Applications/ClipVoice.app/Contents/MacOS/clipvoice-mcp"
+args = []
