@@ -125,4 +125,47 @@ final class ClipVoiceMCPTests: XCTestCase {
         let text = try XCTUnwrap((healthyResult["content"] as? [[String: Any]])?.first?["text"] as? String)
         XCTAssertTrue(text.contains("https://example.com/safe"))
     }
+
+    func testMCPActivitySignalEmittedOnlyOnClipboardDataReadsWithoutLeakingPayload() throws {
+        let url = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let store = ClipStore(fileURL: url)
+        store.ingest("https://secret-internal.example.com/token=xyz123")
+        let server = ClipVoiceMCPServerHandler(store: store)
+        let activityFile = MCPActivitySignal.activityFileURL(for: url)
+
+        // Metadata/handshake/error methods must NOT emit clipboard activity signals.
+        _ = server.handleLine(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}"#)
+        _ = server.handleLine(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        _ = server.handleLine(#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#)
+        _ = server.handleLine(#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#)
+        _ = server.handleLine(#"{"jsonrpc":"2.0","id":4,"method":"resources/list"}"#)
+        _ = server.handleLine(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_clips","arguments":{"limit":1e100}}}"#)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: activityFile.path))
+
+        // Actual clipboard data access across all 5 operations emits sanitized activity signals.
+        let expectedCalls: [(String, MCPActivityOperation)] = [
+            (#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_clips","arguments":{}}}"#, .listClips),
+            (#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_clip","arguments":{"id":"clip-1"}}}"#, .getClip),
+            (#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"search_clips","arguments":{"query":"secret-internal"}}}"#, .searchClips),
+            (#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"get_latest_clip","arguments":{}}}"#, .getLatestClip),
+            (#"{"jsonrpc":"2.0","id":10,"method":"resources/read","params":{"uri":"clipvoice://clips"}}"#, .readResource)
+        ]
+
+        var seenEventIDs = Set<String>()
+        for (line, expectedOp) in expectedCalls {
+            _ = server.handleLine(line)
+            let event = try XCTUnwrap(MCPActivitySignal.readLatest(for: url))
+            XCTAssertEqual(event.operation, expectedOp)
+            XCTAssertTrue(seenEventIDs.insert(event.eventID).inserted, "Expected unique eventID for \(expectedOp)")
+
+            // Signal file must contain zero clipboard payload, queries, or item IDs.
+            let rawSignal = try String(contentsOf: activityFile, encoding: .utf8)
+            XCTAssertFalse(rawSignal.contains("secret-internal"))
+            XCTAssertFalse(rawSignal.contains("xyz123"))
+            XCTAssertFalse(rawSignal.contains("clip-1"))
+        }
+        XCTAssertEqual(seenEventIDs.count, 5)
+    }
 }

@@ -21,6 +21,7 @@ final class FloatingHUDPanel: NSPanel {
         self.backgroundColor = .clear
         self.isOpaque = false
         self.hasShadow = true
+        self.appearance = NSAppearance(named: .darkAqua)
         self.becomesKeyOnlyIfNeeded = true
         self.minSize = NSSize(width: 440, height: 480)
         self.maxSize = NSSize(width: 780, height: 960)

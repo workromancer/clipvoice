@@ -56,6 +56,7 @@ final class ClipVoiceAppDelegate: NSObject, NSApplicationDelegate {
     private var store: ClipStore!
     private var viewModel: ClipVoiceViewModel!
     private var monitor: ClipboardMonitor!
+    private var mcpActivityMonitor: MCPActivityMonitor!
     private var hotKeyManager: GlobalHotKeyManager?
     private var hudPanel: FloatingHUDPanel?
     private var statusBarController: StatusBarController?
@@ -82,6 +83,11 @@ final class ClipVoiceAppDelegate: NSObject, NSApplicationDelegate {
 
         monitor = ClipboardMonitor(store: store) { [weak self] in
             self?.viewModel.refreshFromStore()
+        }
+
+        mcpActivityMonitor = MCPActivityMonitor(storeFileURL: storeURL) { [weak self] event in
+            // Signal active state without opening or focusing a hidden HUD.
+            self?.viewModel.recordMCPActivity(event)
         }
 
         let hostingView = NSHostingView(rootView: HUDView(viewModel: viewModel))
@@ -139,6 +145,7 @@ final class ClipVoiceAppDelegate: NSObject, NSApplicationDelegate {
 
         installLocalKeyboardMonitor()
         monitor.start()
+        mcpActivityMonitor.start()
 
         if options.hudOnLaunch {
             showHUD()
@@ -147,6 +154,7 @@ final class ClipVoiceAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor?.stop()
+        mcpActivityMonitor?.stop()
         hotKeyManager?.unregister()
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)

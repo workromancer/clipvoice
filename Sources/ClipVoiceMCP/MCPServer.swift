@@ -316,6 +316,7 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
                 return toolError(id: id, message: error.localizedDescription)
             }
             let items = store.list(kind: kind, query: query, limit: limit)
+            MCPActivitySignal.emit(operation: .listClips, storeFileURL: store.fileURL)
             let state = store.currentState()
             let payload: JSONValue = .object([
                 "isPaused": .bool(state.isPaused),
@@ -328,7 +329,9 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
             guard let rawID = args["id"]?.stringValue, !rawID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return toolError(id: id, message: "Missing required argument 'id'.")
             }
-            if let item = store.get(idOrSpoken: rawID) {
+            let item = store.get(idOrSpoken: rawID)
+            MCPActivitySignal.emit(operation: .getClip, storeFileURL: store.fileURL)
+            if let item {
                 return toolSuccess(id: id, json: itemDetailJSON(item))
             }
             let recent = store.list(limit: 5).map(\.id).joined(separator: ", ")
@@ -350,6 +353,7 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
                 return toolError(id: id, message: error.localizedDescription)
             }
             let items = store.list(kind: kind, query: query, limit: limit)
+            MCPActivitySignal.emit(operation: .searchClips, storeFileURL: store.fileURL)
             let payload: JSONValue = .object([
                 "query": .string(query),
                 "count": .int(items.count),
@@ -366,7 +370,9 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
             } catch {
                 return toolError(id: id, message: error.localizedDescription)
             }
-            if let item = store.latest(kind: kind) {
+            let item = store.latest(kind: kind)
+            MCPActivitySignal.emit(operation: .getLatestClip, storeFileURL: store.fileURL)
+            if let item {
                 return toolSuccess(id: id, json: itemDetailJSON(item))
             }
             return toolError(id: id, message: "No matching clipboard entries found.")
@@ -396,6 +402,7 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
             return JSONRPCResponse(id: id, error: JSONRPCError(code: -32002, message: "Resource not found: \(uri)"))
         }
         let items = store.list()
+        MCPActivitySignal.emit(operation: .readResource, storeFileURL: store.fileURL)
         let payload: JSONValue = .object([
             "count": .int(items.count),
             "items": .array(items.map { itemSummaryJSON($0) })

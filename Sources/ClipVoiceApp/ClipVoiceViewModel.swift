@@ -16,6 +16,9 @@ final class ClipVoiceViewModel: ObservableObject {
     @Published var showSetupSheet: Bool = false
     @Published var showClearConfirmation: Bool = false
     @Published var copiedFeedbackID: String?
+    @Published private(set) var mcpActivityActive: Bool = false
+    @Published private(set) var mcpActivityOperation: MCPActivityOperation?
+    @Published private(set) var mcpActivityRevision: Int = 0
 
     let store: ClipStore
     var onCopyToPasteboard: ((String) -> Void)?
@@ -25,6 +28,8 @@ final class ClipVoiceViewModel: ObservableObject {
     var onStateChanged: (() -> Void)?
 
     private var feedbackResetTask: Task<Void, Never>?
+    private var mcpExpiryTask: Task<Void, Never>?
+    private let mcpPulseDurationNanoseconds: UInt64 = 5_000_000_000
 
     init(store: ClipStore, hotkeyEnabled: Bool = true) {
         self.store = store
@@ -170,6 +175,29 @@ final class ClipVoiceViewModel: ObservableObject {
 
     func hideHUD() {
         onHideHUD?()
+    }
+
+    var mcpActivityLabel: String? {
+        guard mcpActivityActive else { return nil }
+        if let op = mcpActivityOperation {
+            return "\(L10n.tr("mcp.activity.active")) · \(L10n.tr(op.localizationKey))"
+        }
+        return L10n.tr("mcp.activity.active")
+    }
+
+    func recordMCPActivity(_ event: MCPActivityEvent) {
+        mcpActivityOperation = event.operation
+        mcpActivityRevision += 1
+        mcpActivityActive = true
+
+        mcpExpiryTask?.cancel()
+        let duration = mcpPulseDurationNanoseconds
+        mcpExpiryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: duration)
+            guard !Task.isCancelled else { return }
+            self?.mcpActivityActive = false
+            self?.mcpActivityOperation = nil
+        }
     }
 
     private func showCopiedFeedback(for id: String) {

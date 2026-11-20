@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-VERSION="0.1.0-beta"
+VERSION="0.1.1-beta"
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$ROOT_DIR/build/ClipVoice.app"
 ZIP_PATH="$DIST_DIR/ClipVoice-$VERSION-macos-universal.zip"

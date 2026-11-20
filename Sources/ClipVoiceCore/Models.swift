@@ -1,7 +1,7 @@
 import Foundation
 
 public enum ClipVoiceVersion {
-    public static let current = "0.1.0-beta"
+    public static let current = "0.1.1-beta"
     public static let bundleIdentifier = "dev.workromancer.clipvoice"
     public static let schemaVersion = 1
 }

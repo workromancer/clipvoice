@@ -194,4 +194,36 @@ final class ClipVoiceCoreTests: XCTestCase {
             }
         }
     }
+
+    func testMCPActivityWatermarkPreservesSubsecondFractionAndIgnoresPrelaunchMarkers() throws {
+        let url = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        // Pre-launch signal written at .800s before startup at .850s
+        let prelaunchTime = Date(timeIntervalSince1970: 1_700_000_000.800)
+        let startupTime = Date(timeIntervalSince1970: 1_700_000_000.850)
+        let freshFractionTime = Date(timeIntervalSince1970: 1_700_000_000.900)
+
+        MCPActivitySignal.emit(operation: .listClips, storeFileURL: url, now: prelaunchTime)
+        let watermark = MCPActivityWatermark(storeFileURL: url, now: startupTime)
+
+        // Pre-launch marker must remain ignored on startup poll.
+        XCTAssertNil(watermark.poll())
+
+        // Another stale pre-launch timestamp (even with a different eventID) must be rejected.
+        let staleOther = MCPActivityEvent(eventID: "stale-2", operation: .getClip, timestamp: Date(timeIntervalSince1970: 1_700_000_000.849))
+        XCTAssertNil(watermark.acceptIfFresh(staleOther))
+
+        // Fresh signal within the same whole second (.900 vs .850) must preserve fraction 0.9 across encode/decode and trigger.
+        MCPActivitySignal.emit(operation: .getClip, storeFileURL: url, now: freshFractionTime)
+        let decoded = try XCTUnwrap(MCPActivitySignal.readLatest(for: url))
+        XCTAssertEqual(decoded.timestamp.timeIntervalSince1970, 1_700_000_000.900, accuracy: 0.0001)
+
+        let accepted = try XCTUnwrap(watermark.poll())
+        XCTAssertEqual(accepted.operation, .getClip)
+        XCTAssertEqual(accepted.timestamp.timeIntervalSince1970, 1_700_000_000.900, accuracy: 0.0001)
+
+        // Repeated poll of the same eventID must not re-fire.
+        XCTAssertNil(watermark.poll())
+    }
 }

@@ -111,6 +111,7 @@ struct SetupSheetView: View {
         }
         .padding(16)
         .frame(width: 460, height: 500)
+        .preferredColorScheme(.dark)
     }
 
     private var settingsGroup: some View {

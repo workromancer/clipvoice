@@ -114,7 +114,7 @@ func fail(_ message: String) -> Never {
 }
 
 guard CommandLine.arguments.count >= 3 else {
-    fputs("Usage: ax_e2e.swift <mode: full|ko> <pid>\n", stderr)
+    fputs("Usage: ax_e2e.swift <mode: full|ko|check-no-mcp|wait-mcp-on|wait-mcp-off|check-hidden> <pid> [timeout]\n", stderr)
     exit(2)
 }
 
@@ -122,14 +122,53 @@ let mode = CommandLine.arguments[1]
 guard let pid = Int32(CommandLine.arguments[2]) else {
     fail("Invalid PID")
 }
+let customTimeout = CommandLine.arguments.count >= 4 ? (Double(CommandLine.arguments[3]) ?? 6.0) : 6.0
 
 guard AXIsProcessTrusted() else {
     fail("AXIsProcessTrusted() returned false")
 }
 
 let appEl = AXUIElementCreateApplication(pid)
+
+if mode == "check-hidden" {
+    Thread.sleep(forTimeInterval: 1.0)
+    var val: CFTypeRef?
+    if AXUIElementCopyAttributeValue(appEl, kAXWindowsAttribute as CFString, &val) == .success,
+       let windows = val as? [AXUIElement], !windows.isEmpty {
+        fail("Expected hidden HUD to stay closed on MCP access, but found \(windows.count) window(s)")
+    }
+    print("AX_HIDDEN_VERIFIED: HUD remained closed during MCP access")
+    exit(0)
+}
+
 guard let window = waitForWindow(appElement: appEl, timeout: 10.0) else {
     fail("HUD window did not appear for pid \(pid)")
+}
+
+if mode == "check-no-mcp" {
+    let nodes = collectNodes(root: window)
+    if nodes.contains(where: { $0.identifier == "mcp-activity-badge" || $0.identifier == "mcp-pulse-border" }) {
+        fail("Unexpected MCP activity indicator present when none should be active")
+    }
+    print("AX_NO_MCP_VERIFIED: No stale or metadata-triggered MCP activity")
+    exit(0)
+}
+
+if mode == "wait-mcp-on" {
+    guard let badge = waitForNode(window: window, timeout: customTimeout, matching: { $0.identifier == "mcp-activity-badge" }),
+          waitForNode(window: window, timeout: 1.0, matching: { $0.identifier == "mcp-pulse-border" }) != nil else {
+        fail("MCP pulse border or activity badge did not appear")
+    }
+    print("AX_MCP_ON_VERIFIED: badge='\(badge.label)'")
+    exit(0)
+}
+
+if mode == "wait-mcp-off" {
+    guard waitUntilGone(window: window, timeout: customTimeout, matching: { $0.identifier == "mcp-activity-badge" || $0.identifier == "mcp-pulse-border" }) else {
+        fail("MCP activity indicator did not clear after timeout")
+    }
+    print("AX_MCP_OFF_VERIFIED: Pulse border and MCP badge cleared cleanly")
+    exit(0)
 }
 
 if mode == "ko" {

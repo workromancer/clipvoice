@@ -1,4 +1,4 @@
-# ClipVoice (`0.1.0-beta`)
+# ClipVoice (`0.1.1-beta`)
 
 **Extend your clipboard with voice mode for coding agents.**
 
@@ -6,7 +6,9 @@ ClipVoice is a native macOS floating HUD, menu-bar utility, local stdio MCP serv
 
 When you are dictating to a coding agent in voice mode (Wispr Flow, Superwhisper, Mac Dictation, Codex/Claude voice mode), you no longer have to read long URLs aloud or guess which item was "the second one": glance at the floating HUD and say *"fetch clip 4"* or *"use the link in clip twelve"*.
 
-![ClipVoice Floating HUD](docs/clipvoice-hud.png)
+| Mission-Control Floating HUD | Live MCP Access Pulse (~5s) |
+| --- | --- |
+| ![ClipVoice Floating HUD](docs/clipvoice-hud.png) | ![ClipVoice Live MCP Pulse](docs/clipvoice-hud-pulse.png) |
 
 ---
 
@@ -14,7 +16,7 @@ When you are dictating to a coding agent in voice mode (Wispr Flow, Superwhisper
 
 - **Stable Speakable Identifiers (`clip-1`, `clip-2`, ...)**: Every newly captured item gets a monotonic ID that **never shifts** when newer items arrive or when an existing item is re-copied and bumped to the top (newest-first).
 - **Voice-Friendly Lookup**: Agents and `clipvoice-cli` resolve canonical (`clip-12`), spaced (`clip 12`), numeric (`12`), and spoken number forms (`clip twelve`, `clip twenty four`).
-- **Floating Non-Activating HUD**: Translucent native `NSPanel` floating over your terminal or IDE without stealing focus while you speak, with Always-on-Top pin, search (`⌘F`), `All` / `Links` / `Text` tabs, inspector preview, and keyboard navigation (`↑`/`↓`, `⏎` Copy, `⌫` Delete, `Esc` Hide).
+- **Mission-Control Floating HUD & Live MCP Pulse**: Dark graphite/navy translucent `NSPanel` floating over your terminal or IDE without stealing focus while you speak, with Always-on-Top pin, search (`⌘F`), `All` / `Links` / `Text` tabs, inspector preview, keyboard navigation (`↑`/`↓`, `⏎` Copy, `⌫` Delete, `Esc` Hide), and an animated luminous cyan/violet perimeter pulse + accessible status badge for ~5 seconds whenever a local MCP client reads clipboard data (respecting macOS Reduce Motion).
 - **URL vs. Text Distinction**: Cleanly separates `http`/`https` links (showing domain chips like `github.com` or `localhost:3000`) from text/code snippets.
 - **Menu Bar & Global Shortcut**: `NSStatusItem` quick menu + global `⌥⌘V` shortcut to toggle the HUD, plus Pause/Resume, Copy, Delete, and Clear History controls.
 - **Local Stdio MCP Server + CLI + Agent Skill**: Exposes `list_clips`, `get_clip`, `search_clips`, and `get_latest_clip` over local stdio JSON-RPC 2.0, alongside `clipvoice-cli` and `SKILL.md`.
@@ -24,15 +26,15 @@ When you are dictating to a coding agent in voice mode (Wispr Flow, Superwhisper
 
 ## Installation
 
-### From GitHub Releases (`0.1.0-beta`)
+### From GitHub Releases (`0.1.1-beta`)
 
-Download from the [ClipVoice 0.1.0-beta Release](https://github.com/workromancer/clipvoice/releases/tag/0.1.0-beta) (universal macOS binary for Apple Silicon `arm64` and Intel `x86_64`, macOS 13+):
+Download from the [ClipVoice 0.1.1-beta Release](https://github.com/workromancer/clipvoice/releases/tag/0.1.1-beta) (universal macOS binary for Apple Silicon `arm64` and Intel `x86_64`, macOS 13+):
 
-- [ClipVoice-0.1.0-beta-macos-universal.dmg](https://github.com/workromancer/clipvoice/releases/download/0.1.0-beta/ClipVoice-0.1.0-beta-macos-universal.dmg) — Open DMG and drag `ClipVoice.app` into **Applications**.
-- [ClipVoice-0.1.0-beta-macos-universal.zip](https://github.com/workromancer/clipvoice/releases/download/0.1.0-beta/ClipVoice-0.1.0-beta-macos-universal.zip) — Unzip and move `ClipVoice.app` into `/Applications`.
+- [ClipVoice-0.1.1-beta-macos-universal.dmg](https://github.com/workromancer/clipvoice/releases/download/0.1.1-beta/ClipVoice-0.1.1-beta-macos-universal.dmg) — Open DMG and drag `ClipVoice.app` into **Applications**.
+- [ClipVoice-0.1.1-beta-macos-universal.zip](https://github.com/workromancer/clipvoice/releases/download/0.1.1-beta/ClipVoice-0.1.1-beta-macos-universal.zip) — Unzip and move `ClipVoice.app` into `/Applications`.
 
 > **Gatekeeper Note (Ad-Hoc Signed Beta):**  
-> This `0.1.0-beta` build is ad-hoc signed (not notarized with an Apple Developer ID). On first launch, macOS Gatekeeper may warn that the developer cannot be verified. To open it:
+> This `0.1.1-beta` build is ad-hoc signed (not notarized with an Apple Developer ID). On first launch, macOS Gatekeeper may warn that the developer cannot be verified. To open it:
 > 1. Right-click `/Applications/ClipVoice.app` and choose **Open**, **or**
 > 2. Remove the quarantine attribute after installing:
 >    ```bash

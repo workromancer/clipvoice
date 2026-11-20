@@ -4,12 +4,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-VERSION="0.1.0-beta"
+VERSION="0.1.1-beta"
+BUILD_NUMBER="2"
 BUILD_DIR="$ROOT_DIR/build"
 APP_DIR="$BUILD_DIR/ClipVoice.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
+ICON_SOURCE="$ROOT_DIR/assets/clipvoice-icon.png"
+
+if [[ ! -f "$ICON_SOURCE" ]]; then
+    echo "Error: missing parent-supplied app icon at $ICON_SOURCE (refusing to generate a replacement icon)." >&2
+    exit 1
+fi
 
 echo "==> Building ClipVoice $VERSION (universal arm64 + x86_64)..."
 swift build -c release --arch arm64 --arch x86_64
@@ -22,11 +29,11 @@ for bin in ClipVoice clipvoice-cli clipvoice-mcp; do
     fi
 done
 
-echo "==> Generating AppIcon.icns..."
+echo "==> Generating AppIcon.icns from $ICON_SOURCE..."
 ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
 rm -rf "$APP_DIR" "$ICONSET_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
-swift "$ROOT_DIR/scripts/generate_icon.swift" "$ICONSET_DIR"
+swift "$ROOT_DIR/scripts/build_iconset.swift" "$ICON_SOURCE" "$ICONSET_DIR"
 iconutil -c icns "$ICONSET_DIR" -o "$RESOURCES_DIR/AppIcon.icns"
 rm -rf "$ICONSET_DIR"
 
@@ -36,6 +43,8 @@ cp "$BIN_DIR/clipvoice-cli" "$MACOS_DIR/clipvoice-cli"
 cp "$BIN_DIR/clipvoice-mcp" "$MACOS_DIR/clipvoice-mcp"
 strip -x "$MACOS_DIR/ClipVoice" "$MACOS_DIR/clipvoice-cli" "$MACOS_DIR/clipvoice-mcp" || true
 chmod +x "$MACOS_DIR/ClipVoice" "$MACOS_DIR/clipvoice-cli" "$MACOS_DIR/clipvoice-mcp"
+
+cp "$ICON_SOURCE" "$RESOURCES_DIR/AppLogo.png"
 
 printf "APPL????" > "$CONTENTS_DIR/PkgInfo"
 
@@ -68,7 +77,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$BUILD_NUMBER</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
     <key>LSMinimumSystemVersion</key>

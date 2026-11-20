@@ -100,7 +100,13 @@ public enum L10n {
         "setup.done",
         "menu.recent_clips",
         "menu.no_recent",
-        "menu.hotkey_label"
+        "menu.hotkey_label",
+        "mcp.activity.active",
+        "mcp.op.list_clips",
+        "mcp.op.get_clip",
+        "mcp.op.search_clips",
+        "mcp.op.get_latest_clip",
+        "mcp.op.resources_read"
     ]
 
     private static let fallbackStrings: [String: [String: String]] = [
@@ -157,7 +163,13 @@ public enum L10n {
             "setup.done": "Done",
             "menu.recent_clips": "Recent Clips",
             "menu.no_recent": "No clips captured yet",
-            "menu.hotkey_label": "Shortcut: ⌥⌘V"
+            "menu.hotkey_label": "Shortcut: ⌥⌘V",
+            "mcp.activity.active": "MCP ACTIVE",
+            "mcp.op.list_clips": "Listing clips",
+            "mcp.op.get_clip": "Fetching clip",
+            "mcp.op.search_clips": "Searching clips",
+            "mcp.op.get_latest_clip": "Fetching latest",
+            "mcp.op.resources_read": "Reading resource"
         ],
         "ko": [
             "app.name": "ClipVoice",
@@ -212,7 +224,13 @@ public enum L10n {
             "setup.done": "완료",
             "menu.recent_clips": "최근 클립",
             "menu.no_recent": "캡처된 항목 없음",
-            "menu.hotkey_label": "단축키: ⌥⌘V"
+            "menu.hotkey_label": "단축키: ⌥⌘V",
+            "mcp.activity.active": "MCP 활성",
+            "mcp.op.list_clips": "목록 조회",
+            "mcp.op.get_clip": "클립 조회",
+            "mcp.op.search_clips": "클립 검색",
+            "mcp.op.get_latest_clip": "최신 조회",
+            "mcp.op.resources_read": "리소스 조회"
         ]
     ]
 }

@@ -51,3 +51,9 @@
 "menu.recent_clips" = "Recent Clips";
 "menu.no_recent" = "No clips captured yet";
 "menu.hotkey_label" = "Shortcut: ⌥⌘V";
+"mcp.activity.active" = "MCP ACTIVE";
+"mcp.op.list_clips" = "Listing clips";
+"mcp.op.get_clip" = "Fetching clip";
+"mcp.op.search_clips" = "Searching clips";
+"mcp.op.get_latest_clip" = "Fetching latest";
+"mcp.op.resources_read" = "Reading resource";
