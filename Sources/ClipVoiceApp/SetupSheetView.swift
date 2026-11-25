@@ -92,7 +92,7 @@ struct SetupSheetView: View {
 
                     codeSection(
                         title: L10n.tr("setup.cli_title"),
-                        code: "\"\(cliBinaryPath)\" list --kind url\n\"\(cliBinaryPath)\" get clip-1 --raw",
+                        code: "\"\(cliBinaryPath)\" list --kind all\n\"\(cliBinaryPath)\" get clip-1 --raw\n\"\(cliBinaryPath)\" get clip-2 --output-file /tmp/clip-2.png\nprintf '%s' 'hello' | \"\(cliBinaryPath)\" write --stdin --json\n\"\(cliBinaryPath)\" write-image --file ./image.png --json",
                         copyLabel: L10n.tr("action.copy"),
                         feedbackKey: "cli-cmd"
                     )

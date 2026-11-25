@@ -4,14 +4,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-VERSION="0.1.1-beta"
-BUILD_NUMBER="2"
+VERSION="0.2.0-beta"
+BUILD_NUMBER="3"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 BUILD_DIR="$ROOT_DIR/build"
 APP_DIR="$BUILD_DIR/ClipVoice.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-ICON_SOURCE="$ROOT_DIR/assets/clipvoice-icon.png"
+ICON_SOURCE="$ROOT_DIR/assets/clipvoice-icon-v2.png"
 
 if [[ ! -f "$ICON_SOURCE" ]]; then
     echo "Error: missing parent-supplied app icon at $ICON_SOURCE (refusing to generate a replacement icon)." >&2
@@ -96,11 +97,19 @@ cp -R "$ROOT_DIR/Sources/ClipVoiceCore/Resources/ko.lproj" "$RESOURCES_DIR/ko.lp
 mkdir -p "$RESOURCES_DIR/skills"
 cp -R "$ROOT_DIR/skills/clipvoice" "$RESOURCES_DIR/skills/clipvoice"
 
-echo "==> Ad-hoc signing ClipVoice.app..."
-codesign --force --sign - "$MACOS_DIR/clipvoice-cli"
-codesign --force --sign - "$MACOS_DIR/clipvoice-mcp"
-codesign --force --deep --sign - "$APP_DIR"
-codesign --verify --deep --strict "$APP_DIR"
+if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
+    echo "==> Ad-hoc signing ClipVoice.app..."
+    codesign --force --sign - "$MACOS_DIR/clipvoice-cli"
+    codesign --force --sign - "$MACOS_DIR/clipvoice-mcp"
+    codesign --force --deep --sign - "$APP_DIR"
+else
+    echo "==> Developer ID signing ClipVoice.app ($CODESIGN_IDENTITY)..."
+    codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$MACOS_DIR/clipvoice-cli"
+    codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$MACOS_DIR/clipvoice-mcp"
+    codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$MACOS_DIR/ClipVoice"
+    codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP_DIR"
+fi
+codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 echo "==> Binary architectures:"
 lipo -info "$MACOS_DIR/ClipVoice" "$MACOS_DIR/clipvoice-cli" "$MACOS_DIR/clipvoice-mcp"

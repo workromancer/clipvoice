@@ -4,6 +4,7 @@ import ClipVoiceCore
 
 struct AppLaunchOptions {
     var storePath: String?
+    var prefsSuite: String?
     var hudOnLaunch: Bool = true
     var noHotkey: Bool = false
     var testMode: Bool = false
@@ -18,6 +19,13 @@ struct AppLaunchOptions {
             case "--store":
                 if idx + 1 < arguments.count {
                     opts.storePath = arguments[idx + 1]
+                    idx += 2
+                } else {
+                    idx += 1
+                }
+            case "--prefs-suite":
+                if idx + 1 < arguments.count {
+                    opts.prefsSuite = arguments[idx + 1]
                     idx += 2
                 } else {
                     idx += 1
@@ -54,6 +62,7 @@ struct AppLaunchOptions {
 final class ClipVoiceAppDelegate: NSObject, NSApplicationDelegate {
     private var options = AppLaunchOptions.parse(Array(CommandLine.arguments.dropFirst()))
     private var store: ClipStore!
+    private var preferences: AppPreferencesStore!
     private var viewModel: ClipVoiceViewModel!
     private var monitor: ClipboardMonitor!
     private var mcpActivityMonitor: MCPActivityMonitor!
@@ -74,24 +83,36 @@ final class ClipVoiceAppDelegate: NSObject, NSApplicationDelegate {
             L10n.overrideLocaleIdentifier = locale
         }
 
-        // Menu-bar + floating HUD accessory app (does not clutter Dock unless testMode needs visibility).
         NSApp.setActivationPolicy(options.testMode ? .regular : .accessory)
 
+        let suiteName: String?
+        if let explicitSuite = options.prefsSuite, !explicitSuite.isEmpty {
+            suiteName = explicitSuite
+        } else if options.testMode {
+            suiteName = "dev.workromancer.clipvoice.ephemeral.\(ProcessInfo.processInfo.processIdentifier)"
+        } else {
+            suiteName = nil
+        }
+
+        preferences = AppPreferencesStore(suiteName: suiteName)
         let storeURL = StorePathResolver.resolve(cliArgument: options.storePath)
         store = ClipStore(fileURL: storeURL)
-        viewModel = ClipVoiceViewModel(store: store, hotkeyEnabled: !options.noHotkey)
+        viewModel = ClipVoiceViewModel(
+            store: store,
+            preferences: preferences,
+            hotkeyEnabled: options.noHotkey ? false : nil
+        )
 
         monitor = ClipboardMonitor(store: store) { [weak self] in
             self?.viewModel.refreshFromStore()
         }
 
         mcpActivityMonitor = MCPActivityMonitor(storeFileURL: storeURL) { [weak self] event in
-            // Signal active state without opening or focusing a hidden HUD.
-            self?.viewModel.recordMCPActivity(event)
+            self?.viewModel.handleActivityEvent(event)
         }
 
         let hostingView = NSHostingView(rootView: HUDView(viewModel: viewModel))
-        let panel = FloatingHUDPanel(contentView: hostingView, autosaveFrame: !options.testMode)
+        let panel = FloatingHUDPanel(contentView: hostingView, preferences: preferences)
         panel.onEscapePressed = { [weak self] in
             self?.hideHUD()
         }
@@ -100,8 +121,23 @@ final class ClipVoiceAppDelegate: NSObject, NSApplicationDelegate {
         viewModel.onCopyToPasteboard = { [weak self] text in
             self?.monitor.writeToPasteboardAndSuppressReingest(text)
         }
+        viewModel.onCopyItemToPasteboard = { [weak self] item in
+            self?.monitor.writeItemToPasteboardAndSuppressReingest(item) ?? false
+        }
+        viewModel.onSuppressPasteboardChangeCount = { [weak self] changeCount in
+            self?.monitor.suppressChangeCount(changeCount)
+        }
         viewModel.onTogglePin = { [weak self] pinned in
             self?.hudPanel?.setPinned(pinned)
+        }
+        viewModel.onApplyPlacement = { [weak self] mode in
+            self?.hudPanel?.applyPlacement(mode)
+        }
+        viewModel.onApplyOpacity = { [weak self] opacity in
+            self?.hudPanel?.applyOpacity(opacity)
+        }
+        viewModel.onResetDisplay = { [weak self] in
+            self?.hudPanel?.resetToDefaultFloating()
         }
         viewModel.onToggleHotkey = { [weak self] enabled in
             guard let self else { return }
@@ -130,12 +166,16 @@ final class ClipVoiceAppDelegate: NSObject, NSApplicationDelegate {
                 self?.showHUD()
                 self?.viewModel.showSetupSheet = true
             },
+            onResetWindow: { [weak self] in
+                self?.viewModel.resetDisplayDefaults()
+                self?.showHUD()
+            },
             onQuit: {
                 NSApp.terminate(nil)
             }
         )
 
-        if !options.noHotkey {
+        if !options.noHotkey && viewModel.hotkeyEnabled {
             let manager = GlobalHotKeyManager { [weak self] in
                 self?.toggleHUD()
             }
@@ -218,6 +258,14 @@ final class ClipVoiceAppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 }
             case 53: // Escape
+                if self.viewModel.showDetailPopover {
+                    self.viewModel.showDetailPopover = false
+                    return nil
+                }
+                if self.viewModel.showDisplayPopover {
+                    self.viewModel.showDisplayPopover = false
+                    return nil
+                }
                 if !self.viewModel.showSetupSheet {
                     self.hideHUD()
                     return nil

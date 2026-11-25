@@ -6,6 +6,9 @@ public enum MCPActivityOperation: String, Codable, Sendable {
     case searchClips = "search_clips"
     case getLatestClip = "get_latest_clip"
     case readResource = "resources/read"
+    case writeClip = "write_clip"
+    case writeImage = "write_image"
+    case agentWrite = "agent_write"
 
     public var localizationKey: String {
         switch self {
@@ -14,21 +17,47 @@ public enum MCPActivityOperation: String, Codable, Sendable {
         case .searchClips: return "mcp.op.search_clips"
         case .getLatestClip: return "mcp.op.get_latest_clip"
         case .readResource: return "mcp.op.resources_read"
+        case .writeClip: return "mcp.op.write_clip"
+        case .writeImage: return "mcp.op.write_image"
+        case .agentWrite: return "mcp.op.agent_write"
         }
+    }
+
+    public var isMCPAccess: Bool {
+        switch self {
+        case .listClips, .getClip, .searchClips, .getLatestClip, .readResource:
+            return true
+        case .writeClip, .writeImage, .agentWrite:
+            return false
+        }
+    }
+
+    public var isIncomingWrite: Bool {
+        self == .writeClip || self == .writeImage || self == .agentWrite
     }
 }
 
-/// Sanitized local-only signal emitted when MCP reads clipboard data.
-/// Contains zero clipboard content, queries, or item IDs.
+/// Sanitized local-only signal emitted when MCP reads clipboard data or an agent writes to clipboard.
+/// Contains zero clipboard content, queries, or URLs.
 public struct MCPActivityEvent: Codable, Equatable, Sendable {
     public let eventID: String
     public let operation: MCPActivityOperation
     public let timestamp: Date
+    public let targetItemID: String?
+    public let pasteboardChangeCount: Int?
 
-    public init(eventID: String = UUID().uuidString, operation: MCPActivityOperation, timestamp: Date = Date()) {
+    public init(
+        eventID: String = UUID().uuidString,
+        operation: MCPActivityOperation,
+        timestamp: Date = Date(),
+        targetItemID: String? = nil,
+        pasteboardChangeCount: Int? = nil
+    ) {
         self.eventID = eventID
         self.operation = operation
         self.timestamp = timestamp
+        self.targetItemID = targetItemID
+        self.pasteboardChangeCount = pasteboardChangeCount
     }
 }
 
@@ -75,8 +104,20 @@ public enum MCPActivitySignal {
         return dec
     }()
 
-    public static func emit(operation: MCPActivityOperation, storeFileURL: URL, now: Date = Date()) {
-        let event = MCPActivityEvent(eventID: UUID().uuidString, operation: operation, timestamp: now)
+    public static func emit(
+        operation: MCPActivityOperation,
+        storeFileURL: URL,
+        now: Date = Date(),
+        targetItemID: String? = nil,
+        pasteboardChangeCount: Int? = nil
+    ) {
+        let event = MCPActivityEvent(
+            eventID: UUID().uuidString,
+            operation: operation,
+            timestamp: now,
+            targetItemID: targetItemID,
+            pasteboardChangeCount: pasteboardChangeCount
+        )
         let signalURL = activityFileURL(for: storeFileURL)
         let fm = FileManager.default
 
@@ -93,7 +134,7 @@ public enum MCPActivitySignal {
                 ofItemAtPath: signalURL.path
             )
         } catch {
-            // Best effort: missing directory permissions should never crash MCP responses.
+            // Best effort: missing directory permissions should never crash MCP/CLI responses.
         }
 
         DistributedNotificationCenter.default().postNotificationName(
@@ -115,7 +156,7 @@ public enum MCPActivitySignal {
     }
 }
 
-/// Stateful watermark preventing stale pre-launch MCP markers while preserving sub-second fresh accesses.
+/// Stateful watermark preventing stale pre-launch markers while preserving sub-second fresh accesses.
 public final class MCPActivityWatermark: @unchecked Sendable {
     public let storeFileURL: URL
     public let startupTimestamp: Date

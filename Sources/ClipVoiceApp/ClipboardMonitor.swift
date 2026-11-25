@@ -36,9 +36,23 @@ final class ClipboardMonitor {
     }
 
     func writeToPasteboardAndSuppressReingest(_ text: String) {
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        lastChangeCount = pasteboard.changeCount
+        lastChangeCount = SystemPasteboardWriter.writePlainText(text, pasteboard: pasteboard)
+    }
+
+    @discardableResult
+    func writeItemToPasteboardAndSuppressReingest(_ item: ClipItem) -> Bool {
+        guard let newCount = SystemPasteboardWriter.copyClipItem(item, store: store, pasteboard: pasteboard) else {
+            return false
+        }
+        lastChangeCount = newCount
+        return true
+    }
+
+    func suppressChangeCount(_ changeCount: Int?) {
+        guard let changeCount else { return }
+        if changeCount >= lastChangeCount {
+            lastChangeCount = changeCount
+        }
     }
 
     func pollPasteboard() {
@@ -46,15 +60,22 @@ final class ClipboardMonitor {
         guard currentCount != lastChangeCount else { return }
         lastChangeCount = currentCount
 
-        guard let extracted = PasteboardPrivacyFilter.extractPlainText(from: pasteboard) else {
+        guard let payload = PasteboardPrivacyFilter.extractPayload(from: pasteboard) else {
             return
         }
 
-        let result = store.ingest(extracted)
+        let result: IngestResult
+        switch payload {
+        case .image(let data):
+            result = store.ingestImage(data)
+        case .text(let text):
+            result = store.ingest(text)
+        }
+
         switch result {
         case .inserted, .bumpedExisting:
             onStoreChanged()
-        case .ignoredPaused, .ignoredInvalidOrTooLarge:
+        case .ignoredPaused, .ignoredInvalidOrTooLarge, .persistenceFailed:
             break
         }
     }

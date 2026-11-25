@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import ClipVoiceCore
 
 public enum JSONValue: Codable, Equatable, Sendable {
@@ -104,6 +105,7 @@ public struct JSONRPCError: Encodable, Sendable {
 
 public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
     private let store: ClipStore
+    private let pasteboard: NSPasteboard
     private let encoder: JSONEncoder = {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -121,8 +123,9 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
         return fmt
     }()
 
-    public init(store: ClipStore) {
+    public init(store: ClipStore, pasteboard: NSPasteboard = .general) {
         self.store = store
+        self.pasteboard = pasteboard
     }
 
     public func runStdioLoop() {
@@ -219,21 +222,21 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
     private func handleToolsList(id: JSONValue) -> JSONRPCResponse {
         let kindProperty: JSONValue = .object([
             "type": .string("string"),
-            "enum": .array([.string("all"), .string("url"), .string("text")]),
-            "description": .string("Optional filter by item kind: all, url, or text.")
+            "enum": .array([.string("all"), .string("url"), .string("text"), .string("image")]),
+            "description": .string("Optional filter by item kind: all, url, text, or image.")
         ])
 
         let tools: [JSONValue] = [
             .object([
                 "name": .string("list_clips"),
-                "description": .string("List recent local clipboard entries in newest-first order with their stable speakable IDs (e.g., clip-1, clip-2), kinds (url or text), domains, and previews."),
+                "description": .string("List recent local clipboard entries in newest-first order with their stable speakable IDs (e.g., clip-1, clip-2), kinds (url, text, or image), domains/dimensions, and previews."),
                 "inputSchema": .object([
                     "type": .string("object"),
                     "properties": .object([
                         "kind": kindProperty,
                         "query": .object([
                             "type": .string("string"),
-                            "description": .string("Optional case-insensitive filter matching ID, domain, or content.")
+                            "description": .string("Optional case-insensitive filter matching ID, domain, dimensions, or content.")
                         ]),
                         "limit": .object([
                             "type": .string("integer"),
@@ -244,7 +247,7 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
             ]),
             .object([
                 "name": .string("get_clip"),
-                "description": .string("Fetch the exact full clipboard entry by its stable speakable ID (supports 'clip-4', 'clip 4', '4', or spoken numbers like 'clip four')."),
+                "description": .string("Fetch the exact full clipboard entry by its stable speakable ID (supports 'clip-4', 'clip 4', '4', or spoken numbers like 'clip four'). For image clips, returns both metadata and a standard MCP image content block."),
                 "inputSchema": .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -258,7 +261,7 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
             ]),
             .object([
                 "name": .string("search_clips"),
-                "description": .string("Search captured clipboard entries by keyword, domain, or ID."),
+                "description": .string("Search captured clipboard entries by keyword, domain, dimensions, or ID."),
                 "inputSchema": .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -277,12 +280,52 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
             ]),
             .object([
                 "name": .string("get_latest_clip"),
-                "description": .string("Fetch the most recently copied clipboard entry, optionally filtered to url or text."),
+                "description": .string("Fetch the most recently copied clipboard entry, optionally filtered to url, text, or image. For image clips, returns metadata plus a standard MCP image content block."),
                 "inputSchema": .object([
                     "type": .string("object"),
                     "properties": .object([
                         "kind": kindProperty
                     ])
+                ])
+            ]),
+            .object([
+                "name": .string("write_clip"),
+                "description": .string("MUTATION: Write text or a URL to the local macOS system clipboard and record it in ClipVoice with a stable speakable ID. Only invoke when the user explicitly requests writing or copying content to their clipboard."),
+                "annotations": .object([
+                    "readOnlyHint": .bool(false),
+                    "destructiveHint": .bool(false),
+                    "idempotentHint": .bool(true),
+                    "openWorldHint": .bool(false)
+                ]),
+                "inputSchema": .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "content": .object([
+                            "type": .string("string"),
+                            "description": .string("Exact plain text or http/https URL to write to the macOS clipboard (preserving whitespace, max 512 KB).")
+                        ])
+                    ]),
+                    "required": .array([.string("content")])
+                ])
+            ]),
+            .object([
+                "name": .string("write_image"),
+                "description": .string("MUTATION: Load a local image file on this Mac, validate and normalize it to PNG, write it to the macOS system clipboard, and record it in ClipVoice with a stable ID. Only invoke upon explicit user request; remote URLs are rejected."),
+                "annotations": .object([
+                    "readOnlyHint": .bool(false),
+                    "destructiveHint": .bool(false),
+                    "idempotentHint": .bool(true),
+                    "openWorldHint": .bool(false)
+                ]),
+                "inputSchema": .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "file_path": .object([
+                            "type": .string("string"),
+                            "description": .string("Local filesystem path to an image file (PNG, TIFF, JPEG, HEIC, or GIF; max 16 MB).")
+                        ])
+                    ]),
+                    "required": .array([.string("file_path")])
                 ])
             ])
         ]
@@ -332,7 +375,7 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
             let item = store.get(idOrSpoken: rawID)
             MCPActivitySignal.emit(operation: .getClip, storeFileURL: store.fileURL)
             if let item {
-                return toolSuccess(id: id, json: itemDetailJSON(item))
+                return itemDetailResponse(id: id, item: item)
             }
             let recent = store.list(limit: 5).map(\.id).joined(separator: ", ")
             let hint = recent.isEmpty ? "The clipboard store is currently empty." : "Recent IDs: \(recent)"
@@ -373,9 +416,43 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
             let item = store.latest(kind: kind)
             MCPActivitySignal.emit(operation: .getLatestClip, storeFileURL: store.fileURL)
             if let item {
-                return toolSuccess(id: id, json: itemDetailJSON(item))
+                return itemDetailResponse(id: id, item: item)
             }
             return toolError(id: id, message: "No matching clipboard entries found.")
+
+        case "write_clip":
+            guard let content = args["content"]?.stringValue else {
+                return toolError(id: id, message: "Missing required string argument 'content'.")
+            }
+            let writeResult = SystemPasteboardWriter.performAgentWrite(
+                text: content,
+                store: store,
+                operation: .writeClip,
+                pasteboard: pasteboard
+            )
+            switch writeResult {
+            case .success(let outcome):
+                return writeOutcomeResponse(id: id, outcome: outcome)
+            case .failure(let err):
+                return toolError(id: id, message: err.localizedDescription)
+            }
+
+        case "write_image":
+            guard let filePath = args["file_path"]?.stringValue else {
+                return toolError(id: id, message: "Missing required string argument 'file_path'.")
+            }
+            let writeResult = SystemPasteboardWriter.performAgentImageWrite(
+                filePath: filePath,
+                store: store,
+                operation: .writeImage,
+                pasteboard: pasteboard
+            )
+            switch writeResult {
+            case .success(let outcome):
+                return writeOutcomeResponse(id: id, outcome: outcome)
+            case .failure(let err):
+                return toolError(id: id, message: err.localizedDescription)
+            }
 
         default:
             return JSONRPCResponse(id: id, error: JSONRPCError(code: -32601, message: "Unknown tool: \(name)"))
@@ -430,11 +507,11 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
         guard let value, value != .null else { return nil }
         guard let raw = value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               !raw.isEmpty else {
-            throw ToolArgumentError(message: "Invalid 'kind' argument: expected 'all', 'url', or 'text'.")
+            throw ToolArgumentError(message: "Invalid 'kind' argument: expected 'all', 'url', 'text', or 'image'.")
         }
         if raw == "all" { return nil }
         guard let kind = ClipKind(rawValue: raw) else {
-            throw ToolArgumentError(message: "Invalid 'kind' argument '\(raw)': expected 'all', 'url', or 'text'.")
+            throw ToolArgumentError(message: "Invalid 'kind' argument '\(raw)': expected 'all', 'url', 'text', or 'image'.")
         }
         return kind
     }
@@ -450,6 +527,16 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
         return intVal
     }
 
+    private func imageMetadataJSON(_ image: ClipImageMetadata) -> JSONValue {
+        .object([
+            "width": .int(image.width),
+            "height": .int(image.height),
+            "byteSize": .int(image.byteSize),
+            "mimeType": .string(image.mimeType),
+            "sha256": .string(image.sha256)
+        ])
+    }
+
     private func itemSummaryJSON(_ item: ClipItem) -> JSONValue {
         var obj: [String: JSONValue] = [
             "id": .string(item.id),
@@ -463,6 +550,9 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
         ]
         if let domain = item.domain {
             obj["domain"] = .string(domain)
+        }
+        if let image = item.image {
+            obj["image"] = imageMetadataJSON(image)
         }
         return .object(obj)
     }
@@ -481,7 +571,58 @@ public final class ClipVoiceMCPServerHandler: @unchecked Sendable {
         if let domain = item.domain {
             obj["domain"] = .string(domain)
         }
+        if let image = item.image {
+            obj["image"] = imageMetadataJSON(image)
+        }
         return .object(obj)
+    }
+
+    private func itemDetailResponse(id: JSONValue, item: ClipItem) -> JSONRPCResponse {
+        if item.kind == .image {
+            guard let meta = item.image,
+                  let pngData = store.imageAssets.readPNGData(for: meta) else {
+                return toolError(id: id, message: "Image asset for '\(item.id)' is missing or unreadable.")
+            }
+            let metaText = encodePrettyJSON(itemDetailJSON(item))
+            return JSONRPCResponse(
+                id: id,
+                result: .object([
+                    "content": .array([
+                        .object([
+                            "type": .string("text"),
+                            "text": .string(metaText)
+                        ]),
+                        .object([
+                            "type": .string("image"),
+                            "data": .string(pngData.base64EncodedString()),
+                            "mimeType": .string(meta.mimeType)
+                        ])
+                    ]),
+                    "isError": .bool(false)
+                ])
+            )
+        }
+        return toolSuccess(id: id, json: itemDetailJSON(item))
+    }
+
+    private func writeOutcomeResponse(id: JSONValue, outcome: AgentWriteOutcome) -> JSONRPCResponse {
+        let item = outcome.item
+        var obj: [String: JSONValue] = [
+            "id": .string(item.id),
+            "sequence": .int(item.sequence),
+            "kind": .string(item.kind.rawValue),
+            "status": .string(outcome.isNew ? "created" : "updated"),
+            "charCount": .int(item.charCount),
+            "lineCount": .int(item.lineCount),
+            "updatedAt": .string(isoFormatter.string(from: item.updatedAt))
+        ]
+        if let domain = item.domain {
+            obj["domain"] = .string(domain)
+        }
+        if let image = item.image {
+            obj["image"] = imageMetadataJSON(image)
+        }
+        return toolSuccess(id: id, json: .object(obj))
     }
 
     private func toolSuccess(id: JSONValue, json: JSONValue) -> JSONRPCResponse {

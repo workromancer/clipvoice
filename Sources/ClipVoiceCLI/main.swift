@@ -9,6 +9,9 @@ struct CLIOptions {
     var limit: Int?
     var json: Bool = false
     var raw: Bool = false
+    var useStdin: Bool = false
+    var filePath: String?
+    var outputFile: String?
     var backup: Bool = false
     var target: String = "codex"
     var skillSource: String?
@@ -33,6 +36,10 @@ func parseOptions(_ args: [String]) -> CLIOptions {
             if i + 1 < args.count { opts.query = args[i + 1]; i += 2 } else { i += 1 }
         case "--limit":
             if i + 1 < args.count { opts.limit = Int(args[i + 1]); i += 2 } else { i += 1 }
+        case "--file":
+            if i + 1 < args.count { opts.filePath = args[i + 1]; i += 2 } else { i += 1 }
+        case "--output-file":
+            if i + 1 < args.count { opts.outputFile = args[i + 1]; i += 2 } else { i += 1 }
         case "--target":
             if i + 1 < args.count { opts.target = args[i + 1]; i += 2 } else { i += 1 }
         case "--skill-source":
@@ -41,6 +48,8 @@ func parseOptions(_ args: [String]) -> CLIOptions {
             opts.json = true; i += 1
         case "--raw":
             opts.raw = true; i += 1
+        case "--stdin":
+            opts.useStdin = true; i += 1
         case "--backup":
             opts.backup = true; i += 1
         default:
@@ -55,19 +64,22 @@ func printHelp() {
     clipvoice-cli \(ClipVoiceVersion.current) — Local CLI & MCP bridge for ClipVoice
 
     USAGE:
-      clipvoice-cli list [--kind all|url|text] [--query TEXT] [--limit N] [--json] [--store PATH]
-      clipvoice-cli get <id> [--raw] [--json] [--store PATH]
-      clipvoice-cli search <query> [--kind all|url|text] [--limit N] [--json] [--store PATH]
-      clipvoice-cli latest [--kind all|url|text] [--raw] [--json] [--store PATH]
+      clipvoice-cli list [--kind all|url|text|image] [--query TEXT] [--limit N] [--json] [--store PATH]
+      clipvoice-cli get <id> [--raw | --output-file PATH] [--json] [--store PATH]
+      clipvoice-cli search <query> [--kind all|url|text|image] [--limit N] [--json] [--store PATH]
+      clipvoice-cli latest [--kind all|url|text|image] [--raw | --output-file PATH] [--json] [--store PATH]
+      clipvoice-cli write (--stdin | --file PATH) [--json] [--store PATH]
+      clipvoice-cli write-image --file PATH [--json] [--store PATH]
       clipvoice-cli mcp [--store PATH]
       clipvoice-cli install-skill [--target codex|claude|agents|<dir>] [--backup] [--skill-source PATH]
       clipvoice-cli version
 
     EXAMPLES:
-      clipvoice-cli list --kind url
+      clipvoice-cli list --kind image --json
       clipvoice-cli get clip-4 --raw
-      clipvoice-cli get "clip four" --json
-      clipvoice-cli install-skill --target codex
+      clipvoice-cli get clip-5 --output-file /tmp/clip-5.png --json
+      printf '%s' 'https://example.com' | clipvoice-cli write --stdin --json
+      clipvoice-cli write-image --file ./diagram.png --json
     """)
 }
 
@@ -86,7 +98,15 @@ func printItemTable(_ items: [ClipItem]) {
         return
     }
     for item in items {
-        let tag = item.kind == .url ? "[URL:\(item.domain ?? "link")]" : "[TEXT:\(item.charCount)c]"
+        let tag: String
+        switch item.kind {
+        case .url:
+            tag = "[URL:\(item.domain ?? "link")]"
+        case .text:
+            tag = "[TEXT:\(item.charCount)c]"
+        case .image:
+            tag = "[IMAGE:\(item.image?.dimensionsLabel ?? "png")]"
+        }
         print("\(item.id)\t\(tag)\t\(item.preview)")
     }
 }
@@ -124,6 +144,105 @@ func findBundledSkillSource(explicit: String?) -> URL? {
     return candidates.first { fm.fileExists(atPath: $0.appendingPathComponent("SKILL.md").path) }
 }
 
+struct WriteCommandOutput: Encodable {
+    let id: String
+    let sequence: Int
+    let kind: String
+    let domain: String?
+    let image: ClipImageMetadata?
+    let status: String
+    let charCount: Int
+    let lineCount: Int
+}
+
+struct ImageExportOutput: Encodable {
+    let id: String
+    let kind: String
+    let outputFile: String
+    let width: Int
+    let height: Int
+    let byteSize: Int
+    let mimeType: String
+    let sha256: String
+}
+
+func handleItemFetchOutput(item: ClipItem, opts: CLIOptions, store: ClipStore) {
+    if item.kind == .image {
+        if opts.raw {
+            FileHandle.standardError.write(Data("Error: '\(item.id)' is an image clip; pass --output-file <path> instead of --raw to avoid dumping binary PNG bytes to stdout.\n".utf8))
+            exit(2)
+        }
+        guard let meta = item.image else {
+            FileHandle.standardError.write(Data("Error: image metadata missing for '\(item.id)'.\n".utf8))
+            exit(1)
+        }
+        if let outPath = opts.outputFile {
+            guard let pngData = store.imageAssets.readPNGData(for: meta) else {
+                FileHandle.standardError.write(Data("Error: image asset missing or unreadable for '\(item.id)'.\n".utf8))
+                exit(1)
+            }
+            let expanded = (outPath as NSString).expandingTildeInPath
+            let destURL = URL(fileURLWithPath: expanded)
+            do {
+                try FileManager.default.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try pngData.write(to: destURL, options: [.atomic])
+            } catch {
+                FileHandle.standardError.write(Data("Error writing image to '\(destURL.path)': \(error.localizedDescription)\n".utf8))
+                exit(1)
+            }
+            if opts.json {
+                printJSON(ImageExportOutput(
+                    id: item.id,
+                    kind: item.kind.rawValue,
+                    outputFile: destURL.path,
+                    width: meta.width,
+                    height: meta.height,
+                    byteSize: meta.byteSize,
+                    mimeType: meta.mimeType,
+                    sha256: meta.sha256
+                ))
+            } else {
+                print("Exported \(item.id) (\(meta.dimensionsLabel) PNG, \(meta.byteSize) bytes) to \(destURL.path)")
+            }
+            return
+        }
+        if opts.json {
+            printJSON(item)
+        } else {
+            print("ID: \(item.id)")
+            print("Kind: \(item.kind.rawValue)")
+            print("Dimensions: \(meta.dimensionsLabel)")
+            print("Bytes: \(meta.byteSize)")
+            print("SHA256: \(meta.sha256)")
+            if let path = store.imageAssets.resolveAssetURL(for: meta)?.path {
+                print("ManagedAsset: \(path)")
+            }
+        }
+        return
+    }
+
+    if let outPath = opts.outputFile {
+        let expanded = (outPath as NSString).expandingTildeInPath
+        do {
+            try Data(item.content.utf8).write(to: URL(fileURLWithPath: expanded), options: [.atomic])
+        } catch {
+            FileHandle.standardError.write(Data("Error writing output file: \(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+    }
+
+    if opts.raw {
+        FileHandle.standardOutput.write(Data(item.content.utf8))
+    } else if opts.json {
+        printJSON(item)
+    } else {
+        print("ID: \(item.id)")
+        print("Kind: \(item.kind.rawValue)")
+        if let domain = item.domain { print("Domain: \(domain)") }
+        print("Content:\n\(item.content)")
+    }
+}
+
 let allArgs = Array(CommandLine.arguments.dropFirst())
 guard let command = allArgs.first else {
     printHelp()
@@ -135,7 +254,7 @@ if command == "--help" || command == "-h" || command == "help" {
     exit(0)
 }
 if command == "--version" || command == "-v" || command == "version" {
-    print("clipvoice \(ClipVoiceVersion.current)")
+    print("clipvoice-cli \(ClipVoiceVersion.current)")
     exit(0)
 }
 
@@ -154,23 +273,14 @@ case "list":
 case "get":
     let query = opts.positional.joined(separator: " ")
     guard !query.isEmpty else {
-        FileHandle.standardError.write(Data("Error: missing clip id (e.g. clipvoice get clip-1)\n".utf8))
+        FileHandle.standardError.write(Data("Error: missing clip id (e.g. clipvoice-cli get clip-1)\n".utf8))
         exit(2)
     }
     guard let item = store.get(idOrSpoken: query) else {
         FileHandle.standardError.write(Data("Error: clip '\(query)' not found.\n".utf8))
         exit(1)
     }
-    if opts.raw {
-        FileHandle.standardOutput.write(Data(item.content.utf8))
-    } else if opts.json {
-        printJSON(item)
-    } else {
-        print("ID: \(item.id)")
-        print("Kind: \(item.kind.rawValue)")
-        if let domain = item.domain { print("Domain: \(domain)") }
-        print("Content:\n\(item.content)")
-    }
+    handleItemFetchOutput(item: item, opts: opts, store: store)
 
 case "search":
     let query = opts.positional.joined(separator: " ")
@@ -190,15 +300,102 @@ case "latest":
         FileHandle.standardError.write(Data("Error: no matching clips found.\n".utf8))
         exit(1)
     }
-    if opts.raw {
-        FileHandle.standardOutput.write(Data(item.content.utf8))
-    } else if opts.json {
-        printJSON(item)
+    handleItemFetchOutput(item: item, opts: opts, store: store)
+
+case "write":
+    if !opts.positional.isEmpty {
+        FileHandle.standardError.write(Data("Error: 'write' does not accept positional text arguments; pass --stdin or --file <path>.\n".utf8))
+        exit(2)
+    }
+    guard opts.useStdin != (opts.filePath != nil) else {
+        FileHandle.standardError.write(Data("Error: specify exactly one of --stdin or --file <path>.\n".utf8))
+        exit(2)
+    }
+
+    let rawData: Data
+    if opts.useStdin {
+        rawData = (try? FileHandle.standardInput.readToEnd()) ?? Data()
+    } else if let filePath = opts.filePath {
+        let expanded = (filePath as NSString).expandingTildeInPath
+        do {
+            rawData = try Data(contentsOf: URL(fileURLWithPath: expanded))
+        } catch {
+            FileHandle.standardError.write(Data("Error reading file '\(filePath)': \(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
     } else {
-        print("ID: \(item.id)")
-        print("Kind: \(item.kind.rawValue)")
-        if let domain = item.domain { print("Domain: \(domain)") }
-        print("Content:\n\(item.content)")
+        rawData = Data()
+    }
+
+    guard let text = String(data: rawData, encoding: .utf8) else {
+        FileHandle.standardError.write(Data("Error: input is not valid UTF-8 text.\n".utf8))
+        exit(1)
+    }
+
+    let result = SystemPasteboardWriter.performAgentWrite(
+        text: text,
+        store: store,
+        operation: .agentWrite
+    )
+    switch result {
+    case .success(let outcome):
+        let item = outcome.item
+        let status = outcome.isNew ? "created" : "updated"
+        if opts.json {
+            printJSON(WriteCommandOutput(
+                id: item.id,
+                sequence: item.sequence,
+                kind: item.kind.rawValue,
+                domain: item.domain,
+                image: item.image,
+                status: status,
+                charCount: item.charCount,
+                lineCount: item.lineCount
+            ))
+        } else {
+            print("Wrote \(item.id) (\(status)) to clipboard")
+        }
+    case .failure(let error):
+        FileHandle.standardError.write(Data("Error: \(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
+
+case "write-image":
+    if !opts.positional.isEmpty {
+        FileHandle.standardError.write(Data("Error: 'write-image' requires --file <path>.\n".utf8))
+        exit(2)
+    }
+    guard let filePath = opts.filePath, !filePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        FileHandle.standardError.write(Data("Error: missing required --file <path> argument.\n".utf8))
+        exit(2)
+    }
+
+    let result = SystemPasteboardWriter.performAgentImageWrite(
+        filePath: filePath,
+        store: store,
+        operation: .agentWrite
+    )
+    switch result {
+    case .success(let outcome):
+        let item = outcome.item
+        let status = outcome.isNew ? "created" : "updated"
+        if opts.json {
+            printJSON(WriteCommandOutput(
+                id: item.id,
+                sequence: item.sequence,
+                kind: item.kind.rawValue,
+                domain: item.domain,
+                image: item.image,
+                status: status,
+                charCount: item.charCount,
+                lineCount: item.lineCount
+            ))
+        } else {
+            print("Wrote image \(item.id) (\(status), \(item.image?.dimensionsLabel ?? "png")) to clipboard")
+        }
+    case .failure(let error):
+        FileHandle.standardError.write(Data("Error: \(error.localizedDescription)\n".utf8))
+        exit(1)
     }
 
 case "mcp":
@@ -219,14 +416,12 @@ case "install-skill":
         exit(1)
     }
 
-    // Enumerate only known files from the bundled skill directory.
     let knownRelativeFiles = ["SKILL.md"]
     let timestampFormatter = ISO8601DateFormatter()
     timestampFormatter.formatOptions = [.withInternetDateTime]
     let timestamp = timestampFormatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")
 
     do {
-        // Pre-flight conflict check before modifying any file on disk.
         var conflicts: [(src: URL, dest: URL, identical: Bool)] = []
         for rel in knownRelativeFiles {
             let srcFile = src.appendingPathComponent(rel)
@@ -274,6 +469,6 @@ case "install-skill":
     }
 
 default:
-    FileHandle.standardError.write(Data("Unknown command '\(command)'. Run 'clipvoice --help'.\n".utf8))
+    FileHandle.standardError.write(Data("Unknown command '\(command)'. Run 'clipvoice-cli --help'.\n".utf8))
     exit(2)
 }

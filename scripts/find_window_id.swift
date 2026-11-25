@@ -17,7 +17,7 @@ while Date() < deadline {
                let bounds = info[kCGWindowBounds as String] as? [String: Any],
                let width = bounds["Width"] as? Double,
                let height = bounds["Height"] as? Double,
-               width >= 350, height >= 350,
+               width >= 240, height >= 300,
                let winID = info[kCGWindowNumber as String] as? UInt32 {
                 print(winID)
                 exit(0)

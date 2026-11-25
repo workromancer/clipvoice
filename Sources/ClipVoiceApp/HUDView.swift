@@ -3,17 +3,23 @@ import AppKit
 import ClipVoiceCore
 
 private enum HUDTheme {
-    static let canvasTop = Color(red: 0.043, green: 0.063, blue: 0.114)      // #0B101D
-    static let canvasBottom = Color(red: 0.028, green: 0.043, blue: 0.082)   // #070B15
-    static let cardSurface = Color(red: 0.075, green: 0.106, blue: 0.180)    // #131B2E
-    static let cardSelected = Color(red: 0.090, green: 0.141, blue: 0.243)   // #17243E
-    static let insetSurface = Color(red: 0.035, green: 0.051, blue: 0.094)   // #090D18
-    static let textPrimary = Color(red: 0.945, green: 0.961, blue: 0.976)    // #F1F5F9
-    static let textSecondary = Color(red: 0.541, green: 0.608, blue: 0.722)  // #8A9BB8
-    static let cyan = Color(red: 0.133, green: 0.827, blue: 0.933)           // #22D3EE
-    static let violet = Color(red: 0.545, green: 0.361, blue: 0.965)         // #8B5CF6
-    static let liveGreen = Color(red: 0.204, green: 0.827, blue: 0.600)      // #34D399
-    static let pausedAmber = Color(red: 0.984, green: 0.749, blue: 0.141)    // #FBBF24
+    static let canvas = Color(red: 0.055, green: 0.059, blue: 0.075)         // #0E0F13 Linear deep charcoal
+    static let surfaceElevated = Color(red: 0.082, green: 0.086, blue: 0.106)// #15161B
+    static let rowHover = Color(red: 0.086, green: 0.094, blue: 0.118)       // #16181E
+    static let rowSelected = Color(red: 0.114, green: 0.125, blue: 0.184)    // #1D202F Linear issue selection tint
+    static let rowIncoming = Color(red: 0.110, green: 0.122, blue: 0.196)    // #1C1F32 subtle arrival tint
+    static let tabActive = Color(red: 0.125, green: 0.133, blue: 0.165)      // #20222A
+    static let searchBg = Color(red: 0.075, green: 0.080, blue: 0.100)       // #131419
+    static let textPrimary = Color(red: 0.925, green: 0.933, blue: 0.953)    // #ECEEF3
+    static let textSecondary = Color(red: 0.525, green: 0.549, blue: 0.600)  // #868C99
+    static let textMuted = Color(red: 0.384, green: 0.408, blue: 0.459)      // #626875
+    static let indigo = Color(red: 0.369, green: 0.416, blue: 0.824)         // #5E6AD2 Linear accent
+    static let indigoSoft = Color(red: 0.549, green: 0.592, blue: 0.949)     // #8C97F2
+    static let liveGreen = Color(red: 0.243, green: 0.812, blue: 0.557)      // #3ECF8E
+    static let pausedAmber = Color(red: 0.898, green: 0.663, blue: 0.235)    // #E5A93C
+    static let dangerRed = Color(red: 0.898, green: 0.380, blue: 0.380)      // #E56161
+    static let hairline = Color.white.opacity(0.065)
+    static let rowSeparator = Color.white.opacity(0.045)
 }
 
 struct VisualEffectBackground: NSViewRepresentable {
@@ -43,11 +49,13 @@ private enum AppLogoLoader {
            let img = NSImage(contentsOf: url) {
             return img
         }
-        let devURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("assets/clipvoice-icon.png")
-        if FileManager.default.fileExists(atPath: devURL.path),
-           let img = NSImage(contentsOf: devURL) {
-            return img
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        for rel in ["assets/clipvoice-icon-v2.png", "assets/clipvoice-icon.png"] {
+            let candidate = cwd.appendingPathComponent(rel)
+            if FileManager.default.fileExists(atPath: candidate.path),
+               let img = NSImage(contentsOf: candidate) {
+                return img
+            }
         }
         return nil
     }()
@@ -57,58 +65,95 @@ struct HUDView: View {
     @ObservedObject var viewModel: ClipVoiceViewModel
     @FocusState private var searchFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pulseBreath: Bool = false
+    @State private var mcpPulsePhase: Bool = false
 
-    private let hudCornerRadius: CGFloat = 16
+    private let hudCornerRadius: CGFloat = 10
 
     var body: some View {
-        ZStack {
-            VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
+        GeometryReader { geo in
+            let isCompact = geo.size.width < 365
 
-            LinearGradient(
-                colors: [HUDTheme.canvasTop.opacity(0.94), HUDTheme.canvasBottom.opacity(0.96)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            ZStack {
+                VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
+                HUDTheme.canvas.opacity(0.95)
 
-            VStack(spacing: 0) {
-                headerBar
-                    .padding(.horizontal, 14)
-                    .padding(.top, 13)
-                    .padding(.bottom, 10)
+                VStack(spacing: 0) {
+                    headerBar(isCompact: isCompact)
+                        .frame(height: 38)
+                        .padding(.horizontal, isCompact ? 10 : 14)
 
-                hairlineDivider
+                    hairlineDivider
 
-                searchAndFilterBar
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    toolbarRow(isCompact: isCompact)
+                        .padding(.horizontal, isCompact ? 10 : 14)
+                        .padding(.vertical, 6)
 
-                if viewModel.isPaused {
-                    pausedBanner
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 8)
+                    hairlineDivider
+
+                    if viewModel.isPaused {
+                        pausedBanner(isCompact: isCompact)
+                        hairlineDivider
+                    }
+
+                    clipsListSection(isCompact: isCompact)
+
+                    hairlineDivider
+
+                    bottomCommandBar(isCompact: isCompact)
+                        .frame(height: 28)
+                        .padding(.horizontal, isCompact ? 10 : 14)
                 }
 
-                clipsListSection
+                if viewModel.showDisplayPopover {
+                    overlayScrim { viewModel.showDisplayPopover = false }
+                    VStack {
+                        HStack {
+                            Spacer()
+                            DisplaySettingsPopover(viewModel: viewModel)
+                                .shadow(color: Color.black.opacity(0.55), radius: 16, y: 6)
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 38)
+                    .padding(.trailing, isCompact ? 8 : 12)
+                    .transition(.opacity)
+                }
 
-                hairlineDivider
-
-                inspectorFooter
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                if viewModel.showDetailPopover, let item = viewModel.selectedItem {
+                    let inspectorImageWidth = max(180, geo.size.width - 72)
+                    let inspectorImageHeight = min(240, max(120, geo.size.height * 0.36))
+                    overlayScrim { viewModel.showDetailPopover = false }
+                    VStack {
+                        Spacer()
+                        ItemDetailInspectorOverlay(
+                            item: item,
+                            store: viewModel.store,
+                            maxImageWidth: inspectorImageWidth,
+                            maxImageHeight: inspectorImageHeight,
+                            onCopy: { viewModel.copyItem(item) },
+                            onCopyVoicePrompt: { viewModel.copyVoicePrompt(item) },
+                            onClose: { viewModel.showDetailPopover = false }
+                        )
+                        .padding(12)
+                        .shadow(color: Color.black.opacity(0.55), radius: 16, y: 4)
+                    }
+                    .frame(maxWidth: geo.size.width, maxHeight: geo.size.height)
+                    .padding(.bottom, 28)
+                    .transition(.opacity)
+                }
             }
+            .preferredColorScheme(.dark)
+            .clipShape(RoundedRectangle(cornerRadius: hudCornerRadius, style: .continuous))
+            .overlay(hudBorderOverlay)
+            .padding(1)
         }
-        .preferredColorScheme(.dark)
-        .clipShape(RoundedRectangle(cornerRadius: hudCornerRadius, style: .continuous))
-        .overlay(hudBorderOverlay)
-        .padding(viewModel.mcpActivityActive ? 3 : 1)
-        .frame(minWidth: 440, minHeight: 480)
+        .frame(minWidth: AppPreferencesStore.minDockWidth, minHeight: 400)
         .onChange(of: viewModel.mcpActivityActive) { active in
-            updatePulseAnimation(active: active)
+            updateMCPAnimation(active: active)
         }
         .onChange(of: viewModel.mcpActivityRevision) { _ in
             if viewModel.mcpActivityActive {
-                updatePulseAnimation(active: true)
+                updateMCPAnimation(active: true)
             }
         }
         .sheet(isPresented: $viewModel.showSetupSheet) {
@@ -124,15 +169,21 @@ struct HUDView: View {
         }
     }
 
-    private func updatePulseAnimation(active: Bool) {
+    private func overlayScrim(_ onTap: @escaping () -> Void) -> some View {
+        Color.black.opacity(0.28)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+    }
+
+    private func updateMCPAnimation(active: Bool) {
         if active && !reduceMotion {
-            pulseBreath = false
-            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
-                pulseBreath = true
+            mcpPulsePhase = false
+            withAnimation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true)) {
+                mcpPulsePhase = true
             }
         } else {
             withAnimation(.easeOut(duration: 0.2)) {
-                pulseBreath = false
+                mcpPulsePhase = false
             }
         }
     }
@@ -141,43 +192,17 @@ struct HUDView: View {
         let shape = RoundedRectangle(cornerRadius: hudCornerRadius, style: .continuous)
         return ZStack {
             if viewModel.mcpActivityActive {
-                // Soft outer luminous aura
                 shape
                     .strokeBorder(
-                        LinearGradient(
-                            colors: [HUDTheme.cyan, HUDTheme.violet, HUDTheme.cyan],
-                            startPoint: pulseBreath ? .topLeading : .bottomTrailing,
-                            endPoint: pulseBreath ? .bottomTrailing : .topLeading
-                        ),
-                        lineWidth: 4.5
+                        HUDTheme.indigo.opacity(reduceMotion ? 0.85 : (mcpPulsePhase ? 0.95 : 0.40)),
+                        lineWidth: 1.5
                     )
-                    .blur(radius: 4)
-                    .opacity(reduceMotion ? 0.65 : (pulseBreath ? 0.82 : 0.30))
-
-                // Crisp luminous perimeter ring
-                shape
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [HUDTheme.cyan, HUDTheme.violet, HUDTheme.cyan],
-                            startPoint: pulseBreath ? .topLeading : .topTrailing,
-                            endPoint: pulseBreath ? .bottomTrailing : .bottomLeading
-                        ),
-                        lineWidth: 2.4
-                    )
-                    .opacity(reduceMotion ? 0.95 : (pulseBreath ? 1.0 : 0.68))
                     .accessibilityElement(children: .ignore)
                     .accessibilityIdentifier("mcp-pulse-border")
                     .accessibilityLabel(viewModel.mcpActivityLabel ?? L10n.tr("mcp.activity.active"))
             } else {
                 shape
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [HUDTheme.cyan.opacity(0.28), HUDTheme.violet.opacity(0.18), Color.white.opacity(0.08)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
+                    .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
             }
         }
         .allowsHitTesting(false)
@@ -185,62 +210,32 @@ struct HUDView: View {
 
     private var hairlineDivider: some View {
         Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [Color.clear, HUDTheme.cyan.opacity(0.22), HUDTheme.violet.opacity(0.18), Color.clear],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
+            .fill(HUDTheme.hairline)
             .frame(height: 1)
     }
 
-    // MARK: - Header
+    // MARK: - Header (38pt, compact Linear titlebar)
 
-    private var headerBar: some View {
-        HStack(spacing: 10) {
-            appLogoView
+    private func headerBar(isCompact: Bool) -> some View {
+        HStack(spacing: 8) {
+            appLogoView(size: 18)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 7) {
-                    Text(L10n.tr("app.name"))
-                        .font(.system(size: 14.5, weight: .bold, design: .rounded))
-                        .foregroundColor(HUDTheme.textPrimary)
+            Text(L10n.tr("app.name"))
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundColor(HUDTheme.textPrimary)
 
-                    statusBadge
+            statusBadge(isCompact: isCompact)
 
-                    Text(ClipVoiceVersion.current)
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .foregroundColor(HUDTheme.textSecondary.opacity(0.85))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1.5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(Color.white.opacity(0.05))
-                        )
-                }
+            Spacer(minLength: 4)
 
-                Text(L10n.tr("app.tagline"))
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundColor(HUDTheme.textSecondary)
-                    .lineLimit(1)
+            if let mcpLabel = viewModel.mcpActivityLabel {
+                mcpActivityBadge(label: mcpLabel, isCompact: isCompact)
+                    .transition(.opacity)
             }
 
-            Spacer(minLength: 8)
-
-            HStack(spacing: 5) {
-                HUDIconButton(
-                    systemName: viewModel.isPinned ? "pin.fill" : "pin",
-                    helpText: viewModel.isPinned ? L10n.tr("action.unpin") : L10n.tr("action.pin"),
-                    tint: viewModel.isPinned ? HUDTheme.cyan : HUDTheme.textSecondary,
-                    isActive: viewModel.isPinned,
-                    accessibilityID: "pin-button"
-                ) {
-                    viewModel.togglePin()
-                }
-
-                HUDIconButton(
-                    systemName: viewModel.isPaused ? "play.circle.fill" : "pause.circle",
+            HStack(spacing: 2) {
+                HeaderGlyphButton(
+                    systemName: viewModel.isPaused ? "play.fill" : "pause",
                     helpText: viewModel.isPaused ? L10n.tr("action.resume") : L10n.tr("action.pause"),
                     tint: viewModel.isPaused ? HUDTheme.pausedAmber : HUDTheme.textSecondary,
                     isActive: viewModel.isPaused,
@@ -249,8 +244,19 @@ struct HUDView: View {
                     viewModel.togglePause()
                 }
 
-                HUDIconButton(
+                HeaderGlyphButton(
                     systemName: "slider.horizontal.3",
+                    helpText: L10n.tr("display.title"),
+                    tint: viewModel.showDisplayPopover ? HUDTheme.indigoSoft : HUDTheme.textSecondary,
+                    isActive: viewModel.showDisplayPopover,
+                    accessibilityID: "display-settings-button"
+                ) {
+                    viewModel.showDetailPopover = false
+                    viewModel.showDisplayPopover.toggle()
+                }
+
+                HeaderGlyphButton(
+                    systemName: "terminal",
                     helpText: L10n.tr("action.setup"),
                     tint: HUDTheme.textSecondary,
                     isActive: false,
@@ -259,10 +265,10 @@ struct HUDView: View {
                     viewModel.showSetupSheet = true
                 }
 
-                HUDIconButton(
+                HeaderGlyphButton(
                     systemName: "trash",
                     helpText: L10n.tr("action.clear"),
-                    tint: viewModel.allItems.isEmpty ? HUDTheme.textSecondary.opacity(0.35) : HUDTheme.textSecondary,
+                    tint: viewModel.allItems.isEmpty ? HUDTheme.textMuted.opacity(0.4) : HUDTheme.textSecondary,
                     isActive: false,
                     accessibilityID: "clear-button"
                 ) {
@@ -272,7 +278,7 @@ struct HUDView: View {
                 }
                 .disabled(viewModel.allItems.isEmpty)
 
-                HUDIconButton(
+                HeaderGlyphButton(
                     systemName: "xmark",
                     helpText: L10n.tr("action.close"),
                     tint: HUDTheme.textSecondary,
@@ -285,223 +291,208 @@ struct HUDView: View {
         }
     }
 
-    private var appLogoView: some View {
+    private func appLogoView(size: CGFloat) -> some View {
         Group {
             if let nsImage = AppLogoLoader.image {
                 Image(nsImage: nsImage)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFill()
-                    .frame(width: 30, height: 30)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(HUDTheme.cyan.opacity(0.45), lineWidth: 1)
-                    )
+                    .frame(width: size, height: size)
+                    .clipShape(RoundedRectangle(cornerRadius: 4.5, style: .continuous))
             } else {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [HUDTheme.cyan.opacity(0.85), HUDTheme.violet.opacity(0.9)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 30, height: 30)
-                    Image(systemName: "waveform")
-                        .font(.system(size: 13.5, weight: .bold))
-                        .foregroundColor(.white)
-                }
+                Image(systemName: "waveform")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(HUDTheme.indigoSoft)
+                    .frame(width: size, height: size)
             }
         }
     }
 
-    private var statusBadge: some View {
+    private func statusBadge(isCompact: Bool) -> some View {
         let color = viewModel.isPaused ? HUDTheme.pausedAmber : HUDTheme.liveGreen
-        return HStack(spacing: 4.5) {
+        return HStack(spacing: 4) {
             Circle()
                 .fill(color)
-                .frame(width: 6, height: 6)
-                .shadow(color: color.opacity(0.75), radius: 3)
-            Text(viewModel.isPaused ? L10n.tr("status.paused") : L10n.tr("status.live"))
-                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                .frame(width: 5, height: 5)
+            if !isCompact || viewModel.isPaused {
+                Text(viewModel.isPaused ? L10n.tr("status.paused") : L10n.tr("status.live"))
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundColor(viewModel.isPaused ? HUDTheme.pausedAmber : HUDTheme.textSecondary)
+            }
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2.5)
-        .background(Capsule().fill(color.opacity(0.14)))
-        .overlay(Capsule().strokeBorder(color.opacity(0.35), lineWidth: 0.75))
-        .foregroundColor(color)
+        .accessibilityElement(children: .ignore)
         .accessibilityIdentifier("status-badge")
         .accessibilityLabel(viewModel.isPaused ? L10n.tr("status.paused") : L10n.tr("status.live"))
+        .accessibilityValue(viewModel.isPaused ? L10n.tr("status.paused") : L10n.tr("status.live"))
     }
 
-    // MARK: - Search & Filter
-
-    private var searchAndFilterBar: some View {
-        VStack(spacing: 9) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(HUDTheme.cyan.opacity(0.8))
-
-                TextField(L10n.tr("search.placeholder"), text: $viewModel.searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12.5))
-                    .foregroundColor(HUDTheme.textPrimary)
-                    .focused($searchFocused)
-                    .accessibilityIdentifier("search-field")
-
-                if !viewModel.searchText.isEmpty {
-                    Button {
-                        viewModel.searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundColor(HUDTheme.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("clear-search-button")
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7.5)
-            .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(HUDTheme.insetSurface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(searchFocused ? HUDTheme.cyan.opacity(0.55) : Color.white.opacity(0.08), lineWidth: 1)
-            )
-
-            HStack(spacing: 6) {
-                FilterTabButton(
-                    title: "\(L10n.tr("filter.all")) (\(viewModel.allItems.count))",
-                    isSelected: viewModel.selectedFilter == .all,
-                    accessibilityID: "filter-all"
-                ) {
-                    viewModel.selectedFilter = .all
-                }
-
-                FilterTabButton(
-                    title: "\(L10n.tr("filter.links")) (\(viewModel.urlCount))",
-                    systemImage: "link",
-                    isSelected: viewModel.selectedFilter == .url,
-                    accessibilityID: "filter-url"
-                ) {
-                    viewModel.selectedFilter = .url
-                }
-
-                FilterTabButton(
-                    title: "\(L10n.tr("filter.text")) (\(viewModel.textCount))",
-                    systemImage: "doc.text",
-                    isSelected: viewModel.selectedFilter == .text,
-                    accessibilityID: "filter-text"
-                ) {
-                    viewModel.selectedFilter = .text
-                }
-
-                Spacer(minLength: 6)
-
-                if let mcpLabel = viewModel.mcpActivityLabel {
-                    mcpActivityBadge(label: mcpLabel)
-                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
-                }
-
-                // Keyboard shortcut triggers
-                Button("") { searchFocused = true }
-                    .keyboardShortcut("f", modifiers: .command)
-                    .frame(width: 0, height: 0)
-                    .opacity(0)
-                    .accessibilityHidden(true)
-            }
-        }
-    }
-
-    private func mcpActivityBadge(label: String) -> some View {
-        HStack(spacing: 5) {
+    private func mcpActivityBadge(label: String, isCompact: Bool) -> some View {
+        HStack(spacing: 4) {
             Circle()
-                .fill(HUDTheme.cyan)
-                .frame(width: 6, height: 6)
-                .opacity(reduceMotion ? 1.0 : (pulseBreath ? 1.0 : 0.45))
-            Text(label)
-                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                .fill(HUDTheme.indigoSoft)
+                .frame(width: 5, height: 5)
+                .opacity(reduceMotion ? 1.0 : (mcpPulsePhase ? 1.0 : 0.45))
+            Text(isCompact ? L10n.tr("mcp.activity.active") : label)
+                .font(.system(size: 10, weight: .medium))
                 .lineLimit(1)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-            Capsule()
-                .fill(
-                    LinearGradient(
-                        colors: [HUDTheme.cyan.opacity(0.18), HUDTheme.violet.opacity(0.18)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-        )
-        .overlay(
-            Capsule()
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [HUDTheme.cyan.opacity(0.75), HUDTheme.violet.opacity(0.70)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    ),
-                    lineWidth: 1
-                )
-        )
-        .foregroundColor(HUDTheme.cyan)
+        .padding(.horizontal, 6.5)
+        .padding(.vertical, 2.5)
+        .background(Capsule().fill(HUDTheme.indigo.opacity(0.16)))
+        .foregroundColor(HUDTheme.indigoSoft)
         .accessibilityElement(children: .ignore)
         .accessibilityIdentifier("mcp-activity-badge")
         .accessibilityLabel(label)
         .accessibilityValue(label)
     }
 
-    private var pausedBanner: some View {
-        HStack(spacing: 8) {
+    // MARK: - Unified Filter & Search Toolbar
+
+    private func toolbarRow(isCompact: Bool) -> some View {
+        VStack(spacing: isCompact ? 6 : 0) {
+            HStack(spacing: 4) {
+                HStack(spacing: 2) {
+                    FilterTabButton(
+                        title: "\(L10n.tr("filter.all")) \(viewModel.allItems.count)",
+                        isSelected: viewModel.selectedFilter == .all,
+                        compact: isCompact,
+                        accessibilityID: "filter-all"
+                    ) {
+                        viewModel.selectedFilter = .all
+                    }
+
+                    FilterTabButton(
+                        title: "\(L10n.tr("filter.links")) \(viewModel.urlCount)",
+                        isSelected: viewModel.selectedFilter == .url,
+                        compact: isCompact,
+                        accessibilityID: "filter-url"
+                    ) {
+                        viewModel.selectedFilter = .url
+                    }
+
+                    FilterTabButton(
+                        title: "\(L10n.tr("filter.text")) \(viewModel.textCount)",
+                        isSelected: viewModel.selectedFilter == .text,
+                        compact: isCompact,
+                        accessibilityID: "filter-text"
+                    ) {
+                        viewModel.selectedFilter = .text
+                    }
+
+                    FilterTabButton(
+                        title: "\(isCompact ? L10n.tr("filter.images_compact") : L10n.tr("filter.images")) \(viewModel.imageCount)",
+                        isSelected: viewModel.selectedFilter == .image,
+                        compact: isCompact,
+                        accessibilityID: "filter-image"
+                    ) {
+                        viewModel.selectedFilter = .image
+                    }
+                }
+
+                if !isCompact {
+                    Spacer(minLength: 6)
+                    searchFieldView(maxWidth: 165)
+                } else {
+                    Spacer(minLength: 0)
+                }
+
+                Button("") { searchFocused = true }
+                    .keyboardShortcut("f", modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+            }
+
+            if isCompact {
+                searchFieldView(maxWidth: nil)
+            }
+        }
+    }
+
+    private func searchFieldView(maxWidth: CGFloat?) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10.5))
+                .foregroundColor(HUDTheme.textMuted)
+
+            TextField(L10n.tr("search.compact_placeholder"), text: $viewModel.searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundColor(HUDTheme.textPrimary)
+                .focused($searchFocused)
+                .accessibilityIdentifier("search-field")
+
+            if !viewModel.searchText.isEmpty {
+                Button {
+                    viewModel.searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(HUDTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("clear-search-button")
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .frame(maxWidth: maxWidth)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(HUDTheme.searchBg)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(searchFocused ? HUDTheme.indigo.opacity(0.50) : Color.white.opacity(0.05), lineWidth: 0.75)
+        )
+    }
+
+    private func pausedBanner(isCompact: Bool) -> some View {
+        HStack(spacing: 6) {
             Image(systemName: "pause.circle.fill")
+                .font(.system(size: 10.5))
                 .foregroundColor(HUDTheme.pausedAmber)
-            Text(L10n.tr("status.paused_banner"))
-                .font(.system(size: 11))
-                .foregroundColor(HUDTheme.textPrimary.opacity(0.9))
+            Text(isCompact ? L10n.tr("status.paused") : L10n.tr("status.paused_banner"))
+                .font(.system(size: 10.5))
+                .foregroundColor(HUDTheme.textSecondary)
+                .lineLimit(1)
             Spacer()
             Button(L10n.tr("action.resume")) {
                 viewModel.togglePause()
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.mini)
-            .tint(HUDTheme.pausedAmber)
+            .buttonStyle(.borderless)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundColor(HUDTheme.pausedAmber)
             .accessibilityIdentifier("resume-banner-button")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(HUDTheme.pausedAmber.opacity(0.12))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(HUDTheme.pausedAmber.opacity(0.32), lineWidth: 1)
-        )
+        .padding(.horizontal, isCompact ? 10 : 14)
+        .padding(.vertical, 5)
+        .background(HUDTheme.pausedAmber.opacity(0.08))
     }
 
-    // MARK: - List
+    // MARK: - Flat Edge-to-Edge List
 
-    private var clipsListSection: some View {
+    private func clipsListSection(isCompact: Bool) -> some View {
         Group {
             if viewModel.filteredItems.isEmpty {
                 emptyStateView
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 8) {
+                        VStack(spacing: 0) {
                             ForEach(viewModel.filteredItems) { item in
+                                let isIncoming = viewModel.incomingHighlightID == item.id
+                                let isPendingEntrance = isIncoming && viewModel.incomingEntrancePending && !reduceMotion
+
                                 ClipRowView(
                                     item: item,
+                                    store: viewModel.store,
                                     isSelected: viewModel.selectedItem?.id == item.id,
                                     isCopiedRecently: viewModel.copiedFeedbackID == item.id,
+                                    isIncomingHighlighted: isIncoming,
+                                    incomingIsNew: viewModel.incomingIsNew,
+                                    isCompact: isCompact,
                                     onSelect: {
                                         viewModel.selectedItemID = item.id
                                     },
@@ -511,20 +502,35 @@ struct HUDView: View {
                                     onCopyID: {
                                         viewModel.copyID(item)
                                     },
+                                    onCopyVoicePrompt: {
+                                        viewModel.copyVoicePrompt(item)
+                                    },
+                                    onInspect: {
+                                        viewModel.selectedItemID = item.id
+                                        viewModel.showDetailPopover = true
+                                    },
                                     onDelete: {
                                         viewModel.deleteItem(item)
                                     }
                                 )
                                 .id(item.id)
+                                .opacity(isPendingEntrance ? 0.12 : 1.0)
+                                .offset(y: isPendingEntrance ? -10 : 0)
+                                .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: isPendingEntrance)
                             }
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
                     }
                     .onChange(of: viewModel.selectedItemID) { newID in
                         if let newID {
-                            withAnimation(.easeInOut(duration: 0.15)) {
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
                                 proxy.scrollTo(newID, anchor: .center)
+                            }
+                        }
+                    }
+                    .onChange(of: viewModel.incomingRevision) { _ in
+                        if let targetID = viewModel.incomingHighlightID {
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+                                proxy.scrollTo(targetID, anchor: .top)
                             }
                         }
                     }
@@ -535,91 +541,312 @@ struct HUDView: View {
     }
 
     private var emptyStateView: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 7) {
             Spacer()
-            Image(systemName: viewModel.allItems.isEmpty ? "waveform.and.magnifyingglass" : "magnifyingglass")
-                .font(.system(size: 30, weight: .light))
-                .foregroundColor(HUDTheme.cyan.opacity(0.65))
+            Image(systemName: viewModel.allItems.isEmpty ? "tray" : "magnifyingglass")
+                .font(.system(size: 20, weight: .light))
+                .foregroundColor(HUDTheme.textMuted)
             Text(viewModel.allItems.isEmpty ? L10n.tr("empty.title") : L10n.tr("empty.filtered_title"))
-                .font(.system(size: 13.5, weight: .semibold))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundColor(HUDTheme.textPrimary)
             Text(viewModel.allItems.isEmpty ? L10n.tr("empty.subtitle") : L10n.tr("empty.filtered_subtitle"))
-                .font(.system(size: 11.5))
+                .font(.system(size: 10.5))
                 .foregroundColor(HUDTheme.textSecondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 28)
+                .padding(.horizontal, 24)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Inspector Footer
+    // MARK: - Slim Bottom Command Bar (28pt)
 
-    private var inspectorFooter: some View {
-        VStack(alignment: .leading, spacing: 7) {
+    private func bottomCommandBar(isCompact: Bool) -> some View {
+        HStack(spacing: 8) {
             if let item = viewModel.selectedItem {
-                HStack(spacing: 8) {
-                    Text(item.id)
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(HUDTheme.cyan.opacity(0.16)))
-                        .overlay(Capsule().strokeBorder(HUDTheme.cyan.opacity(0.40), lineWidth: 0.75))
-                        .foregroundColor(HUDTheme.cyan)
+                Text(item.id)
+                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .foregroundColor(HUDTheme.textMuted)
 
-                    Text(L10n.tr("inspector.voice_prompt_label", item.voiceHint))
-                        .font(.system(size: 11, weight: .medium))
+                if !isCompact {
+                    Text(L10n.tr("voice.cue", item.voiceHint))
+                        .font(.system(size: 10.5))
                         .foregroundColor(HUDTheme.textSecondary)
                         .lineLimit(1)
-
-                    Spacer()
-
-                    Button {
-                        viewModel.copyVoicePrompt(item)
-                    } label: {
-                        Label(L10n.tr("action.copy_prompt"), systemImage: "mic")
-                            .font(.system(size: 10.5, weight: .semibold))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                    .tint(HUDTheme.cyan)
-                    .accessibilityIdentifier("copy-voice-prompt-button")
                 }
 
+                Spacer(minLength: 4)
+
+                Button {
+                    viewModel.copyItem(item)
+                } label: {
+                    Text(viewModel.copiedFeedbackID == item.id ? L10n.tr("action.copied") : "\(L10n.tr("action.copy")) ⏎")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundColor(viewModel.copiedFeedbackID == item.id ? HUDTheme.liveGreen : HUDTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("copy-selected-button")
+
+                Text("·")
+                    .font(.system(size: 10))
+                    .foregroundColor(HUDTheme.textMuted)
+
+                Button {
+                    viewModel.showDisplayPopover = false
+                    viewModel.showDetailPopover.toggle()
+                } label: {
+                    Text(L10n.tr("action.inspect"))
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundColor(viewModel.showDetailPopover ? HUDTheme.indigoSoft : HUDTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("copy-voice-prompt-button")
+            } else {
+                Text(L10n.tr("inspector.no_selection"))
+                    .font(.system(size: 10.5))
+                    .foregroundColor(HUDTheme.textMuted)
+                Spacer()
+            }
+        }
+    }
+}
+
+// MARK: - Display & Window Popover
+
+private struct DisplaySettingsPopover: View {
+    @ObservedObject var viewModel: ClipVoiceViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Text(L10n.tr("display.title"))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(HUDTheme.textPrimary)
+
+            HStack(spacing: 4) {
+                PlacementPresetButton(
+                    icon: "sidebar.left",
+                    label: L10n.tr("placement.left"),
+                    isSelected: viewModel.placementMode == .dockLeft,
+                    accessibilityID: "dock-left-button"
+                ) {
+                    viewModel.setPlacementMode(.dockLeft)
+                }
+
+                PlacementPresetButton(
+                    icon: "macwindow",
+                    label: L10n.tr("placement.floating"),
+                    isSelected: viewModel.placementMode == .floating,
+                    accessibilityID: "dock-floating-button"
+                ) {
+                    viewModel.setPlacementMode(.floating)
+                }
+
+                PlacementPresetButton(
+                    icon: "sidebar.right",
+                    label: L10n.tr("placement.right"),
+                    isSelected: viewModel.placementMode == .dockRight,
+                    accessibilityID: "dock-right-button"
+                ) {
+                    viewModel.setPlacementMode(.dockRight)
+                }
+            }
+            .padding(2)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(HUDTheme.canvas)
+            )
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(L10n.tr("display.opacity"))
+                        .font(.system(size: 11))
+                        .foregroundColor(HUDTheme.textSecondary)
+                    Spacer()
+                    Text("\(Int((viewModel.opacity * 100).rounded()))%")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(HUDTheme.textPrimary)
+                        .accessibilityIdentifier("opacity-value-label")
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { viewModel.opacity },
+                        set: { viewModel.setOpacity($0) }
+                    ),
+                    in: AppPreferencesStore.minOpacity...AppPreferencesStore.maxOpacity
+                )
+                .tint(HUDTheme.indigo)
+                .accessibilityIdentifier("opacity-slider")
+
+                HStack(spacing: 5) {
+                    ForEach([0.50, 0.75, 0.96, 1.0], id: \.self) { preset in
+                        let pct = Int(preset * 100)
+                        let active = abs(viewModel.opacity - preset) < 0.02
+                        Button("\(pct)%") {
+                            viewModel.setOpacity(preset)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: active ? .semibold : .regular, design: .monospaced))
+                        .foregroundColor(active ? HUDTheme.indigoSoft : HUDTheme.textSecondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(active ? HUDTheme.indigo.opacity(0.18) : Color.white.opacity(0.04))
+                        )
+                        .accessibilityIdentifier("opacity-preset-\(pct)")
+                    }
+                }
+            }
+
+            Rectangle().fill(HUDTheme.hairline).frame(height: 1)
+
+            Toggle(isOn: Binding(
+                get: { viewModel.isPinned },
+                set: { viewModel.setPinned($0) }
+            )) {
+                Text(L10n.tr("display.always_on_top"))
+                    .font(.system(size: 11.5))
+                    .foregroundColor(HUDTheme.textPrimary)
+            }
+            .tint(HUDTheme.indigo)
+            .accessibilityIdentifier("display-pin-toggle")
+
+            Button {
+                viewModel.resetDisplayDefaults()
+            } label: {
+                Text(L10n.tr("display.reset"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(HUDTheme.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.white.opacity(0.05))
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("reset-display-button")
+        }
+        .padding(13)
+        .frame(width: 242)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(HUDTheme.surfaceElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.11), lineWidth: 1)
+        )
+        .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: - On-Demand Detail Inspector Overlay
+
+private struct ItemDetailInspectorOverlay: View {
+    let item: ClipItem
+    let store: ClipStore
+    let maxImageWidth: CGFloat
+    let maxImageHeight: CGFloat
+    let onCopy: () -> Void
+    let onCopyVoicePrompt: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Text(item.id)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(HUDTheme.indigoSoft)
+                if let domain = item.domain {
+                    Text("· \(domain)")
+                        .font(.system(size: 11))
+                        .foregroundColor(HUDTheme.textSecondary)
+                        .lineLimit(1)
+                } else if let meta = item.image {
+                    Text("· \(meta.dimensionsLabel) PNG · \(meta.formattedByteSize)")
+                        .font(.system(size: 11))
+                        .foregroundColor(HUDTheme.textSecondary)
+                        .lineLimit(1)
+                } else {
+                    Text("· \(L10n.tr("inspector.chars_count", item.charCount))")
+                        .font(.system(size: 11))
+                        .foregroundColor(HUDTheme.textSecondary)
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(HUDTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("inspector-close-button")
+            }
+
+            if item.kind == .image, let meta = item.image {
+                VStack(alignment: .leading, spacing: 6) {
+                    ClipImageThumbnailView(
+                        metadata: meta,
+                        store: store,
+                        maxWidth: maxImageWidth,
+                        maxHeight: maxImageHeight,
+                        accessibilityID: "inspector-image-preview"
+                    )
+                    .frame(maxWidth: .infinity, alignment: .center)
+
+                    Text("SHA-256: \(meta.sha256.prefix(16))… · \(meta.mimeType)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(HUDTheme.textMuted)
+                }
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(HUDTheme.searchBg)
+                )
+            } else {
                 ScrollView {
                     Text(item.content)
-                        .font(.system(size: 11.5, design: item.kind == .url ? .monospaced : .default))
-                        .foregroundColor(HUDTheme.textPrimary.opacity(0.92))
+                        .font(.system(size: 11.5, design: item.prefersMonospacedPreview ? .monospaced : .default))
+                        .foregroundColor(HUDTheme.textPrimary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 54)
+                .frame(maxHeight: 160)
                 .padding(8)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(HUDTheme.insetSurface)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(HUDTheme.searchBg)
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
-                )
-            } else {
-                Text(L10n.tr("inspector.no_selection"))
-                    .font(.system(size: 11))
-                    .foregroundColor(HUDTheme.textSecondary)
             }
 
-            Text(L10n.tr("shortcuts.hint"))
-                .font(.system(size: 9.5, design: .monospaced))
-                .foregroundColor(HUDTheme.textSecondary.opacity(0.75))
-                .frame(maxWidth: .infinity, alignment: .center)
+            HStack(spacing: 8) {
+                Button(L10n.tr("action.copy"), action: onCopy)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(HUDTheme.indigo)
+                    .accessibilityIdentifier("inspector-copy-button")
+                Button(L10n.tr("action.copy_prompt"), action: onCopyVoicePrompt)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                Spacer()
+            }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(HUDTheme.surfaceElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.11), lineWidth: 1)
+        )
     }
 }
 
 // MARK: - Subviews
 
-private struct HUDIconButton: View {
+private struct HeaderGlyphButton: View {
     let systemName: String
     let helpText: String
     let tint: Color
@@ -627,31 +854,30 @@ private struct HUDIconButton: View {
     let accessibilityID: String
     let action: () -> Void
 
+    @State private var isHovering = false
+
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 12.5, weight: .regular))
                 .foregroundColor(tint)
-                .frame(width: 27, height: 27)
+                .frame(width: 24, height: 24)
                 .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isActive ? tint.opacity(0.14) : Color.white.opacity(0.05))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(isActive ? tint.opacity(0.45) : Color.white.opacity(0.08), lineWidth: 0.75)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isActive ? Color.white.opacity(0.09) : (isHovering ? Color.white.opacity(0.06) : Color.clear))
                 )
         }
         .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
         .help(helpText)
         .accessibilityLabel(helpText)
         .accessibilityIdentifier(accessibilityID)
     }
 }
 
-private struct FilterTabButton: View {
-    let title: String
-    var systemImage: String? = nil
+private struct PlacementPresetButton: View {
+    let icon: String
+    let label: String
     let isSelected: Bool
     let accessibilityID: String
     let action: () -> Void
@@ -659,24 +885,44 @@ private struct FilterTabButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 10))
-                }
-                Text(title)
-                    .font(.system(size: 11, weight: isSelected ? .bold : .medium))
+                Image(systemName: icon)
+                    .font(.system(size: 10))
+                Text(label)
+                    .font(.system(size: 10.5, weight: isSelected ? .medium : .regular))
             }
-            .padding(.horizontal, 9)
+            .frame(maxWidth: .infinity)
             .padding(.vertical, 4.5)
             .background(
-                Capsule()
-                    .fill(isSelected ? HUDTheme.cyan.opacity(0.16) : Color.white.opacity(0.05))
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isSelected ? HUDTheme.tabActive : Color.clear)
             )
-            .overlay(
-                Capsule()
-                    .strokeBorder(isSelected ? HUDTheme.cyan.opacity(0.55) : Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .foregroundColor(isSelected ? HUDTheme.cyan : HUDTheme.textSecondary)
+            .foregroundColor(isSelected ? HUDTheme.textPrimary : HUDTheme.textSecondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(accessibilityID)
+    }
+}
+
+private struct FilterTabButton: View {
+    let title: String
+    let isSelected: Bool
+    var compact: Bool = false
+    let accessibilityID: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: compact ? 10.5 : 11, weight: isSelected ? .medium : .regular))
+                .lineLimit(1)
+                .padding(.horizontal, compact ? 6.5 : 7)
+                .padding(.vertical, 3.5)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isSelected ? HUDTheme.tabActive : Color.clear)
+                )
+                .foregroundColor(isSelected ? HUDTheme.textPrimary : HUDTheme.textSecondary)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(accessibilityID)
@@ -684,117 +930,267 @@ private struct FilterTabButton: View {
     }
 }
 
+@MainActor
+private enum ClipImageCache {
+    static let cache: NSCache<NSString, NSImage> = {
+        let c = NSCache<NSString, NSImage>()
+        c.countLimit = 80
+        return c
+    }()
+
+    static func image(for metadata: ClipImageMetadata, store: ClipStore) -> NSImage? {
+        let key = "\(store.fileURL.path)::\(metadata.sha256)" as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+        guard let pngData = store.imageAssets.readPNGData(for: metadata),
+              let img = NSImage(data: pngData) else {
+            return nil
+        }
+        cache.setObject(img, forKey: key)
+        return img
+    }
+}
+
+private struct TransparencyCheckerboard: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let tile: CGFloat = 8
+            let light = Color.white.opacity(0.06)
+            let dark = Color.black.opacity(0.18)
+            var y: CGFloat = 0
+            var row = 0
+            while y < size.height {
+                var x: CGFloat = 0
+                var col = 0
+                while x < size.width {
+                    let isEven = (row + col) % 2 == 0
+                    ctx.fill(
+                        Path(CGRect(x: x, y: y, width: tile, height: tile)),
+                        with: .color(isEven ? light : dark)
+                    )
+                    x += tile
+                    col += 1
+                }
+                y += tile
+                row += 1
+            }
+        }
+    }
+}
+
+private struct ClipImageThumbnailView: View {
+    let metadata: ClipImageMetadata
+    let store: ClipStore
+    let maxWidth: CGFloat
+    let maxHeight: CGFloat
+    let accessibilityID: String
+
+    private var aspectRatio: CGFloat {
+        guard metadata.height > 0 else { return 1.0 }
+        return CGFloat(metadata.width) / CGFloat(metadata.height)
+    }
+
+    private var displaySize: CGSize {
+        let w = CGFloat(max(1, metadata.width))
+        let h = CGFloat(max(1, metadata.height))
+        let scale = min(maxWidth / w, maxHeight / h, 1.0)
+        return CGSize(
+            width: max(36, floor(w * scale)),
+            height: max(32, floor(h * scale))
+        )
+    }
+
+    var body: some View {
+        let size = displaySize
+        Group {
+            if let nsImage = ClipImageCache.image(for: metadata, store: store) {
+                ZStack {
+                    TransparencyCheckerboard()
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(aspectRatio, contentMode: .fit)
+                }
+                .frame(width: size.width, height: size.height)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.75)
+                )
+            } else {
+                HStack(spacing: 5) {
+                    Image(systemName: "photo")
+                    Text("\(metadata.dimensionsLabel) PNG")
+                }
+                .font(.system(size: 11))
+                .foregroundColor(HUDTheme.textMuted)
+                .padding(.vertical, 8)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier(accessibilityID)
+        .accessibilityLabel("Image \(metadata.dimensionsLabel) PNG \(metadata.formattedByteSize)")
+    }
+}
+
 private struct ClipRowView: View {
     let item: ClipItem
+    let store: ClipStore
     let isSelected: Bool
     let isCopiedRecently: Bool
+    let isIncomingHighlighted: Bool
+    let incomingIsNew: Bool
+    let isCompact: Bool
     let onSelect: () -> Void
     let onCopy: () -> Void
     let onCopyID: () -> Void
+    let onCopyVoicePrompt: () -> Void
+    let onInspect: () -> Void
     let onDelete: () -> Void
 
     @State private var isHovering = false
 
-    private var badgeAccent: Color {
-        item.kind == .url ? HUDTheme.cyan : HUDTheme.violet
+    private var kindIconName: String {
+        switch item.kind {
+        case .url: return "link"
+        case .text: return "doc.text"
+        case .image: return "photo"
+        }
+    }
+
+    private var headerTitle: String {
+        switch item.kind {
+        case .url:
+            return item.domain ?? "Link"
+        case .image:
+            if let meta = item.image {
+                return "\(meta.dimensionsLabel) PNG · \(meta.formattedByteSize)"
+            }
+            return L10n.tr("kind.image")
+        case .text:
+            if item.lineCount > 1 {
+                return "\(item.lineCount) lines · \(item.charCount)c"
+            }
+            return "\(item.charCount) chars"
+        }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 7) {
-                // Stable Speakable ID Pill
-                Text(item.id)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(item.kind == .url ? Color(red: 0.02, green: 0.12, blue: 0.16) : .white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(badgeAccent)
-                    )
-                    .accessibilityIdentifier("clip-id-\(item.id)")
-                    .accessibilityLabel(item.id)
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(isSelected ? HUDTheme.indigo : Color.clear)
+                .frame(width: 2)
 
-                // Kind / Domain badge
-                HStack(spacing: 4) {
-                    Image(systemName: item.kind == .url ? "link" : "doc.text")
-                        .font(.system(size: 9.5, weight: .semibold))
-                    if item.kind == .url, let domain = item.domain {
-                        Text(domain)
-                            .lineLimit(1)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    Text(item.id)
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundColor(isIncomingHighlighted || isSelected ? HUDTheme.indigoSoft : HUDTheme.textMuted)
+                        .frame(minWidth: isCompact ? 42 : 46, alignment: .leading)
+                        .accessibilityIdentifier("clip-id-\(item.id)")
+                        .accessibilityLabel(item.id)
+
+                    Image(systemName: kindIconName)
+                        .font(.system(size: 10.5))
+                        .foregroundColor(item.kind == .text ? HUDTheme.textMuted : HUDTheme.indigoSoft.opacity(0.85))
+
+                    Text(headerTitle)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundColor(item.kind == .text ? HUDTheme.textSecondary : HUDTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    if isIncomingHighlighted {
+                        Text(incomingIsNew ? L10n.tr("incoming.badge.new") : L10n.tr("incoming.badge.updated"))
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(HUDTheme.indigoSoft)
+                            .padding(.horizontal, 4.5)
+                            .padding(.vertical, 1)
+                            .background(RoundedRectangle(cornerRadius: 3.5).fill(HUDTheme.indigo.opacity(0.20)))
+                            .accessibilityIdentifier("incoming-indicator-\(item.id)")
+                            .accessibilityLabel(incomingIsNew ? L10n.tr("incoming.badge.new") : L10n.tr("incoming.badge.updated"))
+                    }
+
+                    Spacer(minLength: 6)
+
+                    if isHovering || isSelected {
+                        HStack(spacing: 6) {
+                            RowActionGlyph(
+                                systemName: isCopiedRecently ? "checkmark" : "doc.on.doc",
+                                tint: isCopiedRecently ? HUDTheme.liveGreen : HUDTheme.textSecondary,
+                                helpText: L10n.tr("action.copy"),
+                                accessibilityID: "copy-button-\(item.id)",
+                                action: onCopy
+                            )
+                            RowActionGlyph(
+                                systemName: "number",
+                                tint: HUDTheme.textSecondary,
+                                helpText: L10n.tr("action.copy_id"),
+                                accessibilityID: "copy-id-button-\(item.id)",
+                                action: onCopyID
+                            )
+                            RowActionGlyph(
+                                systemName: "trash",
+                                tint: isHovering ? HUDTheme.dangerRed : HUDTheme.textMuted,
+                                helpText: "\(L10n.tr("action.delete")) \(item.id)",
+                                accessibilityID: "delete-button-\(item.id)",
+                                action: onDelete
+                            )
+                        }
                     } else {
-                        Text("\(L10n.tr("kind.text")) · \(L10n.tr("inspector.chars_count", item.charCount))")
+                        Text(RelativeDateTimeFormatter.localizedString(for: item.updatedAt, localeIdentifier: L10n.currentLocaleIdentifier()))
+                            .font(.system(size: 10.5))
+                            .foregroundColor(HUDTheme.textMuted)
+                            .lineLimit(1)
                     }
                 }
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundColor(badgeAccent)
-                .padding(.horizontal, 7.5)
-                .padding(.vertical, 2.5)
-                .background(Capsule().fill(badgeAccent.opacity(0.14)))
-                .overlay(Capsule().strokeBorder(badgeAccent.opacity(0.28), lineWidth: 0.75))
 
-                Spacer()
-
-                Text(RelativeDateTimeFormatter.localizedString(for: item.updatedAt, localeIdentifier: L10n.currentLocaleIdentifier()))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(HUDTheme.textSecondary.opacity(0.85))
+                Group {
+                    switch item.kind {
+                    case .image:
+                        if let meta = item.image {
+                            ClipImageThumbnailView(
+                                metadata: meta,
+                                store: store,
+                                maxWidth: isCompact ? 200 : 290,
+                                maxHeight: isCompact ? 88 : 112,
+                                accessibilityID: "clip-image-thumb-\(item.id)"
+                            )
+                            .padding(.top, 1)
+                        }
+                    case .url:
+                        Text(item.content.trimmingCharacters(in: .whitespacesAndNewlines))
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundColor(Color(red: 0.77, green: 0.80, blue: 0.87))
+                            .lineLimit(isCompact ? 2 : 3)
+                            .lineSpacing(1.5)
+                            .fixedSize(horizontal: false, vertical: true)
+                    case .text:
+                        Text(item.multilinePreview(maxCharacters: 600))
+                            .font(.system(size: isCompact ? 11.5 : 12, design: item.prefersMonospacedPreview ? .monospaced : .default))
+                            .foregroundColor(HUDTheme.textPrimary.opacity(0.94))
+                            .lineLimit(isCompact ? 3 : 4)
+                            .lineSpacing(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.leading, isCompact ? 49 : 53)
             }
-
-            Text(item.preview)
-                .font(.system(size: 12, design: item.kind == .url ? .monospaced : .default))
-                .foregroundColor(HUDTheme.textPrimary)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            HStack(spacing: 6) {
-                Button(action: onCopy) {
-                    Label(
-                        isCopiedRecently ? L10n.tr("action.copied") : L10n.tr("action.copy"),
-                        systemImage: isCopiedRecently ? "checkmark" : "doc.on.doc"
-                    )
-                    .font(.system(size: 10.5, weight: .semibold))
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .tint(isCopiedRecently ? HUDTheme.liveGreen : HUDTheme.cyan)
-                .accessibilityIdentifier("copy-button-\(item.id)")
-
-                Button(action: onCopyID) {
-                    Text(L10n.tr("action.copy_id"))
-                        .font(.system(size: 10.5, weight: .medium))
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .tint(HUDTheme.textSecondary)
-                .accessibilityIdentifier("copy-id-button-\(item.id)")
-
-                Spacer()
-
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 10.5))
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(isHovering || isSelected ? Color(red: 0.97, green: 0.44, blue: 0.44) : HUDTheme.textSecondary.opacity(0.6))
-                .help(L10n.tr("action.delete"))
-                .accessibilityLabel("\(L10n.tr("action.delete")) \(item.id)")
-                .accessibilityIdentifier("delete-button-\(item.id)")
-            }
+            .padding(.leading, isCompact ? 8 : 12)
+            .padding(.trailing, isCompact ? 10 : 14)
+            .padding(.vertical, 8.5)
         }
-        .padding(10.5)
         .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(isSelected ? HUDTheme.cardSelected : HUDTheme.cardSurface.opacity(isHovering ? 0.96 : 0.85))
+            isIncomingHighlighted
+                ? HUDTheme.rowIncoming
+                : (isSelected ? HUDTheme.rowSelected : (isHovering ? HUDTheme.rowHover : Color.clear))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(
-                    isSelected
-                        ? HUDTheme.cyan.opacity(0.65)
-                        : Color.white.opacity(isHovering ? 0.14 : 0.07),
-                    lineWidth: isSelected ? 1.25 : 1
-                )
-        )
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(HUDTheme.rowSeparator)
+                .frame(height: 1)
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             onSelect()
@@ -802,8 +1198,48 @@ private struct ClipRowView: View {
         .onHover { hovering in
             isHovering = hovering
         }
+        .contextMenu {
+            Button(L10n.tr("action.copy"), action: onCopy)
+            Button(L10n.tr("action.copy_id"), action: onCopyID)
+            Button(L10n.tr("action.copy_prompt"), action: onCopyVoicePrompt)
+            Button(L10n.tr("action.inspect"), action: onInspect)
+            Divider()
+            Button(L10n.tr("action.delete"), role: .destructive, action: onDelete)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clip-row-\(item.id)")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .accessibilityAction {
+            onSelect()
+        }
+        .accessibilityAction(named: L10n.tr("action.copy")) {
+            onCopy()
+        }
+        .accessibilityAction(named: L10n.tr("action.delete")) {
+            onDelete()
+        }
+    }
+}
+
+private struct RowActionGlyph: View {
+    let systemName: String
+    let tint: Color
+    let helpText: String
+    let accessibilityID: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11))
+                .foregroundColor(tint)
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(helpText)
+        .accessibilityLabel(helpText)
+        .accessibilityIdentifier(accessibilityID)
     }
 }
 
@@ -820,7 +1256,11 @@ private extension RelativeDateTimeFormatter {
 
     @MainActor
     static func localizedString(for date: Date, localeIdentifier: String) -> String {
+        let now = Date()
+        if abs(now.timeIntervalSince(date)) < 2.0 || date > now {
+            return localeIdentifier == "ko" ? "방금" : "now"
+        }
         let fmt = clipVoiceFormatters[localeIdentifier] ?? clipVoiceFormatters["en"]!
-        return fmt.localizedString(for: date, relativeTo: Date())
+        return fmt.localizedString(for: date, relativeTo: now)
     }
 }

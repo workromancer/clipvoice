@@ -1,7 +1,13 @@
 import Foundation
 import AppKit
+import UniformTypeIdentifiers
 
-/// Enforces privacy-aware pasteboard filtering (transient, concealed, password-manager, oversized).
+public enum PasteboardPayload: Equatable, Sendable {
+    case text(String)
+    case image(Data)
+}
+
+/// Enforces privacy-aware pasteboard filtering BEFORE reading any bytes (transient, concealed, password-manager, oversized).
 public enum PasteboardPrivacyFilter {
     public static let maxContentUTF8Bytes = 512_000
 
@@ -13,6 +19,14 @@ public enum PasteboardPrivacyFilter {
         "com.apple.security.concealed",
         "de.petermaurer.TransientPasteboardType",
         "PasteboardGeneratorType"
+    ]
+
+    public static let supportedImageTypeIdentifiers: [String] = [
+        UTType.png.identifier,
+        UTType.tiff.identifier,
+        "public.jpeg",
+        "public.heic",
+        "com.compuserve.gif"
     ]
 
     public static func shouldIgnorePasteboardTypes(_ typeIdentifiers: [String]) -> Bool {
@@ -33,11 +47,53 @@ public enum PasteboardPrivacyFilter {
         return byteCount > 0 && byteCount <= maxContentUTF8Bytes
     }
 
+    public static func extractPayload(from pasteboard: NSPasteboard) -> PasteboardPayload? {
+        let rawTypes = (pasteboard.types ?? []).map(\.rawValue)
+        guard !rawTypes.isEmpty else { return nil }
+        // Privacy check MUST happen before reading any payload bytes from pasteboard.
+        guard !shouldIgnorePasteboardTypes(rawTypes) else { return nil }
+
+        // Check per-item types too before reading any bytes.
+        if let pbItems = pasteboard.pasteboardItems {
+            let allItemTypes = pbItems.flatMap { $0.types.map(\.rawValue) }
+            if shouldIgnorePasteboardTypes(allItemTypes) {
+                return nil
+            }
+        }
+
+        // Image precedence: if real pasteboard image bytes exist (not merely a copied file URL), prefer image.
+        if let imageData = extractImageData(from: pasteboard, availableTypes: rawTypes) {
+            return .image(imageData)
+        }
+
+        if let text = extractPlainTextOnly(from: pasteboard) {
+            return .text(text)
+        }
+
+        return nil
+    }
+
     public static func extractPlainText(from pasteboard: NSPasteboard) -> String? {
         let types = (pasteboard.types ?? []).map(\.rawValue)
         guard !types.isEmpty else { return nil }
         guard !shouldIgnorePasteboardTypes(types) else { return nil }
+        return extractPlainTextOnly(from: pasteboard)
+    }
 
+    private static func extractImageData(from pasteboard: NSPasteboard, availableTypes: [String]) -> Data? {
+        let availableSet = Set(availableTypes)
+        // Prefer PNG directly, then TIFF, then other native image UTIs. Never read public.file-url paths passively.
+        for typeID in supportedImageTypeIdentifiers where availableSet.contains(typeID) {
+            if let data = pasteboard.data(forType: NSPasteboard.PasteboardType(typeID)),
+               !data.isEmpty,
+               data.count <= ImageAssetStore.maxCompressedInputBytes {
+                return data
+            }
+        }
+        return nil
+    }
+
+    private static func extractPlainTextOnly(from pasteboard: NSPasteboard) -> String? {
         let candidate = pasteboard.string(forType: .string)
             ?? pasteboard.string(forType: NSPasteboard.PasteboardType("public.utf8-plain-text"))
             ?? pasteboard.string(forType: .URL)

@@ -1,19 +1,28 @@
 import AppKit
 import SwiftUI
+import ClipVoiceCore
 
-final class FloatingHUDPanel: NSPanel {
+@MainActor
+final class FloatingHUDPanel: NSPanel, NSWindowDelegate {
     var onEscapePressed: (() -> Void)?
+    private let preferences: AppPreferencesStore
+    private var currentPlacementMode: WindowPlacementMode
+    private var isApplyingPlacement = false
+    nonisolated(unsafe) private var screenObserver: NSObjectProtocol?
 
-    init(contentView: NSView, autosaveFrame: Bool = true) {
+    init(contentView: NSView, preferences: AppPreferencesStore) {
+        self.preferences = preferences
+        self.currentPlacementMode = preferences.placementMode
+
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 490, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 600),
             styleMask: [.nonactivatingPanel, .titled, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
 
         self.isFloatingPanel = true
-        self.level = .floating
+        self.level = preferences.isPinned ? .floating : .normal
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         self.titleVisibility = .hidden
         self.titlebarAppearsTransparent = true
@@ -23,24 +32,35 @@ final class FloatingHUDPanel: NSPanel {
         self.hasShadow = true
         self.appearance = NSAppearance(named: .darkAqua)
         self.becomesKeyOnlyIfNeeded = true
-        self.minSize = NSSize(width: 440, height: 480)
-        self.maxSize = NSSize(width: 780, height: 960)
+        self.minSize = NSSize(width: AppPreferencesStore.minDockWidth, height: 400)
+        self.maxSize = NSSize(width: 820, height: 1400)
+        self.alphaValue = CGFloat(preferences.opacity)
         self.setAccessibilityIdentifier("clipvoice-hud-window")
-        self.setAccessibilityTitle(ClipVoiceCoreTitleFallback.title)
+        self.setAccessibilityTitle("ClipVoice")
 
-        // Hide standard traffic lights because the HUD uses custom header controls.
         self.standardWindowButton(.closeButton)?.isHidden = true
         self.standardWindowButton(.miniaturizeButton)?.isHidden = true
         self.standardWindowButton(.zoomButton)?.isHidden = true
 
         self.contentView = contentView
-        if autosaveFrame {
-            self.setFrameAutosaveName("ClipVoiceFloatingHUDFrame")
-            if !self.setFrameUsingName("ClipVoiceFloatingHUDFrame") {
-                positionNearTopRight()
+        self.delegate = self
+
+        applyPlacement(preferences.placementMode, persistWidth: false)
+
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.reconcileForScreenChange()
             }
-        } else {
-            positionNearTopRight()
+        }
+    }
+
+    deinit {
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
         }
     }
 
@@ -55,17 +75,82 @@ final class FloatingHUDPanel: NSPanel {
         level = pinned ? .floating : .normal
     }
 
-    func positionNearTopRight() {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
-        let visible = screen.visibleFrame
-        let width: CGFloat = 490
-        let height: CGFloat = min(620, visible.height - 48)
-        let x = visible.maxX - width - 24
-        let y = visible.maxY - height - 24
-        setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
+    func applyOpacity(_ opacity: Double) {
+        alphaValue = CGFloat(AppPreferencesStore.clampOpacity(opacity))
     }
-}
 
-private enum ClipVoiceCoreTitleFallback {
-    static let title = "ClipVoice"
+    func applyPlacement(_ mode: WindowPlacementMode, persistWidth: Bool = true) {
+        currentPlacementMode = mode
+        let targetScreen = self.screen ?? NSScreen.main ?? NSScreen.screens.first
+        let visible = targetScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let availableScreens = NSScreen.screens.map(\.visibleFrame)
+
+        let targetFrame = AppPreferencesStore.targetFrame(
+            for: mode,
+            screenVisibleFrame: visible,
+            dockWidth: preferences.dockWidth,
+            savedFloatingFrame: preferences.savedFloatingFrame(),
+            availableScreens: availableScreens.isEmpty ? [visible] : availableScreens
+        )
+
+        isApplyingPlacement = true
+        setFrame(targetFrame, display: true, animate: false)
+        contentView?.needsLayout = true
+        displayIfNeeded()
+        isApplyingPlacement = false
+
+        if persistWidth && mode == .floating {
+            preferences.saveFloatingFrame(targetFrame)
+        }
+    }
+
+    func resetToDefaultFloating() {
+        applyPlacement(.floating, persistWidth: true)
+        applyOpacity(preferences.opacity)
+    }
+
+    func reconcileForScreenChange() {
+        let visible = (self.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let availableScreens = NSScreen.screens.map(\.visibleFrame)
+        switch currentPlacementMode {
+        case .dockLeft, .dockRight:
+            applyPlacement(currentPlacementMode, persistWidth: false)
+        case .floating:
+            if !AppPreferencesStore.isFrameSafeOnScreen(frame, availableScreens: availableScreens.isEmpty ? [visible] : availableScreens) {
+                preferences.saveFloatingFrame(
+                    AppPreferencesStore.targetFrame(
+                        for: .floating,
+                        screenVisibleFrame: visible,
+                        dockWidth: preferences.dockWidth,
+                        savedFloatingFrame: nil,
+                        availableScreens: availableScreens
+                    )
+                )
+                applyPlacement(.floating, persistWidth: false)
+            }
+        }
+    }
+
+    // MARK: - NSWindowDelegate
+
+    func windowDidResize(_ notification: Notification) {
+        guard !isApplyingPlacement else { return }
+        switch currentPlacementMode {
+        case .floating:
+            preferences.saveFloatingFrame(frame)
+        case .dockLeft, .dockRight:
+            let visible = (self.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+                ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            let clampedWidth = AppPreferencesStore.clampDockWidth(frame.width, in: visible)
+            preferences.dockWidth = clampedWidth
+        }
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard !isApplyingPlacement else { return }
+        if currentPlacementMode == .floating {
+            preferences.saveFloatingFrame(frame)
+        }
+    }
 }

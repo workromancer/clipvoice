@@ -1,5 +1,7 @@
 import XCTest
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 @testable import ClipVoiceCore
 
 final class ClipVoiceCoreTests: XCTestCase {
@@ -225,5 +227,461 @@ final class ClipVoiceCoreTests: XCTestCase {
 
         // Repeated poll of the same eventID must not re-fire.
         XCTAssertNil(watermark.poll())
+    }
+
+    func testAgentWriteWorksWhilePausedPreservesExactWhitespaceAndDeduplicatesStableID() throws {
+        let url = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let store = ClipStore(fileURL: url)
+        store.setPaused(true)
+        XCTAssertEqual(store.ingest("ignored passive copy"), .ignoredPaused)
+
+        let payload = "  func test() {\n\treturn 42\n}  "
+        let first = try store.writeFromAgent(payload).get()
+        XCTAssertTrue(first.isNew)
+        XCTAssertEqual(first.item.id, "clip-1")
+        XCTAssertEqual(first.item.content, payload)
+
+        // Add another item while paused, then repeat first payload -> ID clip-1 preserved and bumped to top
+        _ = try store.writeFromAgent("https://example.com/two").get()
+        let repeated = try store.writeFromAgent(payload).get()
+        XCTAssertFalse(repeated.isNew)
+        XCTAssertEqual(repeated.item.id, "clip-1")
+        XCTAssertEqual(store.list().map(\.id), ["clip-1", "clip-2"])
+
+        // Reject empty and oversized writes
+        XCTAssertEqual(store.writeFromAgent("   \n\t "), .failure(.emptyContent))
+        let tooBig = String(repeating: "x", count: PasteboardPrivacyFilter.maxContentUTF8Bytes + 1)
+        XCTAssertEqual(store.writeFromAgent(tooBig), .failure(.payloadTooLarge(maxBytes: PasteboardPrivacyFilter.maxContentUTF8Bytes)))
+    }
+
+    func testConcurrentMultiStoreWritesDoNotLoseEntries() async throws {
+        let url = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let totalWrites = 20
+        await withTaskGroup(of: Void.self) { group in
+            for i in 1...totalWrites {
+                group.addTask {
+                    let store = ClipStore(fileURL: url)
+                    if i % 2 == 0 {
+                        _ = store.writeFromAgent("concurrent-write-\(i)")
+                    } else {
+                        _ = store.ingest("concurrent-ingest-\(i)")
+                    }
+                }
+            }
+        }
+
+        let verifier = ClipStore(fileURL: url)
+        let items = verifier.list(limit: 100)
+        XCTAssertEqual(items.count, totalWrites)
+        XCTAssertEqual(Set(items.map(\.id)).count, totalWrites)
+    }
+
+    func testPreferencesPlacementOpacityClampingAndOffscreenSafety() {
+        let suite = "dev.workromancer.clipvoice.unit.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        let prefs = AppPreferencesStore(suiteName: suite)
+        prefs.opacity = 0.10
+        XCTAssertEqual(prefs.opacity, 0.45, accuracy: 0.0001)
+        prefs.opacity = 2.0
+        XCTAssertEqual(prefs.opacity, 1.0, accuracy: 0.0001)
+        prefs.opacity = 0.72
+        XCTAssertEqual(prefs.opacity, 0.72, accuracy: 0.0001)
+
+        let screen = NSRect(x: 0, y: 38, width: 1440, height: 837)
+        let leftFrame = AppPreferencesStore.targetFrame(
+            for: .dockLeft,
+            screenVisibleFrame: screen,
+            dockWidth: 300,
+            savedFloatingFrame: nil,
+            availableScreens: [screen]
+        )
+        XCTAssertEqual(leftFrame.minX, 10)
+        XCTAssertEqual(leftFrame.minY, 48)
+        XCTAssertEqual(leftFrame.width, 300)
+        XCTAssertEqual(leftFrame.height, 817)
+
+        let rightFrame = AppPreferencesStore.targetFrame(
+            for: .dockRight,
+            screenVisibleFrame: screen,
+            dockWidth: 310,
+            savedFloatingFrame: nil,
+            availableScreens: [screen]
+        )
+        XCTAssertEqual(rightFrame.maxX, 1430)
+        XCTAssertEqual(rightFrame.width, 310)
+        XCTAssertEqual(rightFrame.height, 817)
+
+        let offscreen = NSRect(x: -4000, y: -4000, width: 460, height: 600)
+        XCTAssertFalse(AppPreferencesStore.isFrameSafeOnScreen(offscreen, availableScreens: [screen]))
+        let recovered = AppPreferencesStore.targetFrame(
+            for: .floating,
+            screenVisibleFrame: screen,
+            dockWidth: 300,
+            savedFloatingFrame: offscreen,
+            availableScreens: [screen]
+        )
+        XCTAssertTrue(AppPreferencesStore.isFrameSafeOnScreen(recovered, availableScreens: [screen]))
+    }
+
+    func testAgentWritePreservesWhitespaceWrappedURLByteForByteAndOperationClassification() throws {
+        let url = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let store = ClipStore(fileURL: url)
+        let wrappedURL = "  https://example.com/wrapped?a=1  \n"
+        let outcome = try store.writeFromAgent(wrappedURL).get()
+        XCTAssertTrue(outcome.isNew)
+        XCTAssertEqual(outcome.item.kind, .url)
+        XCTAssertEqual(outcome.item.domain, "example.com")
+        XCTAssertEqual(outcome.item.content, wrappedURL)
+        XCTAssertEqual(store.get(idOrSpoken: "clip-1")?.content, wrappedURL)
+
+        // Repeat identical write preserves clip-1
+        let repeatOutcome = try store.writeFromAgent(wrappedURL).get()
+        XCTAssertFalse(repeatOutcome.isNew)
+        XCTAssertEqual(repeatOutcome.item.id, "clip-1")
+
+        // Passive watcher ingest of the same wrapped URL reconciles without duplicating
+        if case .bumpedExisting(let ingested) = store.ingest(wrappedURL) {
+            XCTAssertEqual(ingested.id, "clip-1")
+            XCTAssertEqual(ingested.content, wrappedURL)
+        } else {
+            XCTFail("Expected ingest of identical wrapped URL to bump existing clip-1")
+        }
+        XCTAssertEqual(store.list().count, 1)
+
+        // Read operations trigger MCP read border pulse; write operations trigger incoming card only
+        for readOp in [MCPActivityOperation.listClips, .getClip, .searchClips, .getLatestClip, .readResource] {
+            XCTAssertTrue(readOp.isMCPAccess, "Expected \(readOp) to trigger MCP read border")
+            XCTAssertFalse(readOp.isIncomingWrite)
+        }
+        for writeOp in [MCPActivityOperation.writeClip, .writeImage, .agentWrite] {
+            XCTAssertFalse(writeOp.isMCPAccess, "Expected \(writeOp) NOT to trigger MCP read border")
+            XCTAssertTrue(writeOp.isIncomingWrite)
+        }
+    }
+
+    private func makeSyntheticImageData(width: Int, height: Int, uti: CFString, r: CGFloat = 0.25, g: CGFloat = 0.45, b: CGFloat = 0.90, alpha: CGFloat = 0.75) throws -> Data {
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+        let ctx = try XCTUnwrap(CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        ctx.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        ctx.setFillColor(red: r, green: g, blue: b, alpha: alpha)
+        ctx.fill(CGRect(x: 4, y: 4, width: max(1, width - 8), height: max(1, height - 8)))
+        let cgImage = try XCTUnwrap(ctx.makeImage())
+        let out = NSMutableData()
+        let dest = try XCTUnwrap(CGImageDestinationCreateWithData(out, uti, 1, nil))
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(dest))
+        return out as Data
+    }
+
+    func testImageIngestDedupeTIFFToPNGTransparencyAndOrphanCleanup() throws {
+        let url = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let store = ClipStore(fileURL: url)
+        let pngData = try makeSyntheticImageData(width: 120, height: 80, uti: UTType.png.identifier as CFString)
+        let tiffData = try makeSyntheticImageData(width: 120, height: 80, uti: UTType.tiff.identifier as CFString)
+
+        let res1 = store.ingestImage(pngData)
+        guard case .inserted(let item1) = res1 else {
+            return XCTFail("Expected PNG ingest to insert clip-1")
+        }
+        XCTAssertEqual(item1.id, "clip-1")
+        XCTAssertEqual(item1.kind, .image)
+        XCTAssertEqual(item1.image?.width, 120)
+        XCTAssertEqual(item1.image?.height, 80)
+
+        let asset1 = try XCTUnwrap(item1.image)
+        let asset1URL = try XCTUnwrap(store.imageAssets.resolveAssetURL(for: asset1))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: asset1URL.path))
+        let attrs = try FileManager.default.attributesOfItem(atPath: asset1URL.path)
+        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+
+        // Identical pixel image arriving as TIFF deduplicates to clip-1
+        let resTiff = store.ingestImage(tiffData)
+        guard case .bumpedExisting(let bumped) = resTiff else {
+            return XCTFail("Expected identical TIFF image to dedupe to clip-1")
+        }
+        XCTAssertEqual(bumped.id, "clip-1")
+
+        // Second distinct image creates clip-2
+        let png2 = try makeSyntheticImageData(width: 64, height: 96, uti: UTType.png.identifier as CFString, r: 0.9, g: 0.2, b: 0.3, alpha: 1.0)
+        guard case .inserted(let item2) = store.ingestImage(png2) else {
+            return XCTFail("Expected second image insert")
+        }
+        XCTAssertEqual(item2.id, "clip-2")
+        let asset2URL = try XCTUnwrap(store.imageAssets.resolveAssetURL(for: try XCTUnwrap(item2.image)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: asset2URL.path))
+
+        // Delete clip-1 -> removes orphaned asset1 file while keeping asset2 intact
+        XCTAssertTrue(store.delete(id: "clip-1"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: asset1URL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: asset2URL.path))
+
+        // Clear removes remaining asset2
+        store.clear()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: asset2URL.path))
+    }
+
+    func testImageValidationRejectsInvalidOversizedAndPathTraversal() throws {
+        let url = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = ClipStore(fileURL: url)
+
+        XCTAssertEqual(store.ingestImage(Data("not an image".utf8)), .ignoredInvalidOrTooLarge)
+        XCTAssertEqual(store.ingestImage(Data()), .ignoredInvalidOrTooLarge)
+
+        // Oversized > 8192 width
+        let tooWidePNG = try makeSyntheticImageData(width: 8200, height: 10, uti: UTType.png.identifier as CFString)
+        XCTAssertEqual(store.ingestImage(tooWidePNG), .ignoredInvalidOrTooLarge)
+
+        // Malformed asset filename in metadata must never resolve
+        let badMeta = ClipImageMetadata(assetFileName: "../../etc/passwd", width: 10, height: 10, byteSize: 10, sha256: "abc")
+        XCTAssertNil(store.imageAssets.resolveAssetURL(for: badMeta))
+        XCTAssertNil(store.imageAssets.readPNGData(for: badMeta))
+    }
+
+    func testConcealedPasteboardExcludesImageAndImagePrecedenceOverText() throws {
+        let pngData = try makeSyntheticImageData(width: 32, height: 32, uti: UTType.png.identifier as CFString)
+
+        // Concealed PNG must be ignored before reading bytes
+        let pbConcealed = NSPasteboard.withUniqueName()
+        defer { pbConcealed.releaseGlobally() }
+        let concealedItem = NSPasteboardItem()
+        concealedItem.setData(pngData, forType: .png)
+        concealedItem.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        pbConcealed.writeObjects([concealedItem])
+        XCTAssertNil(PasteboardPrivacyFilter.extractPayload(from: pbConcealed))
+
+        // Pasteboard with both PNG and text prefers image cleanly
+        let pbMixed = NSPasteboard.withUniqueName()
+        defer { pbMixed.releaseGlobally() }
+        let mixedItem = NSPasteboardItem()
+        mixedItem.setData(pngData, forType: .png)
+        mixedItem.setString("screenshot.png", forType: .string)
+        pbMixed.writeObjects([mixedItem])
+        if case .image(let extracted) = PasteboardPrivacyFilter.extractPayload(from: pbMixed) {
+            XCTAssertEqual(extracted, pngData)
+        } else {
+            XCTFail("Expected image precedence when both image and text exist")
+        }
+
+        // File URL + filename text without real image data must NOT passively read the file
+        let pbFileURL = NSPasteboard.withUniqueName()
+        defer { pbFileURL.releaseGlobally() }
+        let fileItem = NSPasteboardItem()
+        fileItem.setString("file:///tmp/nonexistent-image.png", forType: .fileURL)
+        fileItem.setString("nonexistent-image.png", forType: .string)
+        pbFileURL.writeObjects([fileItem])
+        if case .text(let txt) = PasteboardPrivacyFilter.extractPayload(from: pbFileURL) {
+            XCTAssertEqual(txt, "nonexistent-image.png")
+        } else {
+            XCTFail("Expected plain text only when no real image UTI exists")
+        }
+    }
+
+    func testSchema1MigrationReloadsTextAndURLWithoutLoss() throws {
+        let url = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let schema1JSON = """
+        {
+          "schemaVersion": 1,
+          "nextSequence": 8,
+          "isPaused": false,
+          "maxItems": 50,
+          "items": [
+            {
+              "id": "clip-7",
+              "sequence": 7,
+              "kind": "url",
+              "content": "https://github.com/workromancer/clipvoice",
+              "domain": "github.com",
+              "createdAt": "2026-11-20T03:00:00Z",
+              "updatedAt": "2026-11-20T03:00:00Z"
+            },
+            {
+              "id": "clip-4",
+              "sequence": 4,
+              "kind": "text",
+              "content": "  line 1\\n  line 2",
+              "createdAt": "2026-11-20T02:00:00Z",
+              "updatedAt": "2026-11-20T02:00:00Z"
+            }
+          ]
+        }
+        """
+        try Data(schema1JSON.utf8).write(to: url)
+
+        let store = ClipStore(fileURL: url)
+        let loaded = store.list()
+        XCTAssertEqual(loaded.map(\.id), ["clip-7", "clip-4"])
+        XCTAssertNil(loaded[0].image)
+        XCTAssertEqual(loaded[1].multilinePreview(), "  line 1\n  line 2")
+        XCTAssertTrue(loaded[1].prefersMonospacedPreview)
+
+        let pngData = try makeSyntheticImageData(width: 40, height: 40, uti: UTType.png.identifier as CFString)
+        guard case .inserted(let imgItem) = store.ingestImage(pngData) else {
+            return XCTFail("Expected image insert after schema 1 load")
+        }
+        XCTAssertEqual(imgItem.id, "clip-8")
+        XCTAssertEqual(store.list().map(\.id), ["clip-8", "clip-7", "clip-4"])
+    }
+
+    func testStoreNamespacedAssetDirectoriesIsolateStoresInSameParent() throws {
+        let sharedDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipvoice-namespace-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: sharedDir) }
+        try FileManager.default.createDirectory(at: sharedDir, withIntermediateDirectories: true)
+
+        let storeA = ClipStore(fileURL: sharedDir.appendingPathComponent("a.json"))
+        let storeB = ClipStore(fileURL: sharedDir.appendingPathComponent("b.json"))
+
+        XCTAssertNotEqual(storeA.imageAssets.directoryURL, storeB.imageAssets.directoryURL)
+        XCTAssertNotEqual(storeA.imageAssets.directoryURL.lastPathComponent, "images")
+        XCTAssertNotEqual(storeB.imageAssets.directoryURL.lastPathComponent, "images")
+
+        let sharedImg = try makeSyntheticImageData(width: 48, height: 48, uti: UTType.png.identifier as CFString)
+        let extraImg = try makeSyntheticImageData(width: 64, height: 32, uti: UTType.png.identifier as CFString)
+
+        guard case .inserted(let itemA1) = storeA.ingestImage(sharedImg),
+              case .inserted(let itemA2) = storeA.ingestImage(extraImg),
+              case .inserted(let itemB1) = storeB.ingestImage(sharedImg) else {
+            return XCTFail("Expected inserts into both isolated stores")
+        }
+
+        let metaB1 = try XCTUnwrap(itemB1.image)
+        XCTAssertNotNil(storeB.imageAssets.readPNGData(for: metaB1))
+
+        // Eviction, delete, and full clear in storeA must never remove storeB's identically hashed PNG asset.
+        XCTAssertTrue(storeA.delete(id: itemA1.id))
+        storeA.setMaxItems(5)
+        for idx in 1...6 {
+            XCTAssertNotEqual(storeA.ingest("evict-\(idx)"), .persistenceFailed)
+        }
+        XCTAssertNil(storeA.get(idOrSpoken: itemA2.id))
+        XCTAssertTrue(storeA.clear())
+        XCTAssertNotNil(storeB.imageAssets.readPNGData(for: metaB1))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(storeB.imageAssets.resolveAssetURL(for: metaB1)).path))
+    }
+
+    func testFailedPersistRestoresSnapshotPreservesAssetsAndSkipsPasteboardSideEffects() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipvoice-persist-fail-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let storeURL = dir.appendingPathComponent("history.json")
+        let store = ClipStore(fileURL: storeURL)
+        XCTAssertTrue(store.setMaxItems(5))
+
+        let img1 = try makeSyntheticImageData(width: 32, height: 32, uti: UTType.png.identifier as CFString)
+        let img2 = try makeSyntheticImageData(width: 44, height: 44, uti: UTType.png.identifier as CFString)
+
+        guard case .inserted(let item1) = store.ingestImage(img1) else {
+            return XCTFail("Expected img1 insert")
+        }
+        for i in 1...3 {
+            guard case .inserted = store.ingest("item-\(i)") else { return XCTFail("Expected text insert") }
+        }
+        guard case .inserted(let item5) = store.ingestImage(img2) else {
+            return XCTFail("Expected img2 insert")
+        }
+
+        let meta1 = try XCTUnwrap(item1.image)
+        let meta5 = try XCTUnwrap(item5.image)
+        let asset1Path = try XCTUnwrap(store.imageAssets.resolveAssetURL(for: meta1)).path
+        let asset5Path = try XCTUnwrap(store.imageAssets.resolveAssetURL(for: meta5)).path
+        XCTAssertEqual(store.list().count, 5)
+
+        // Replace history.json with a directory so all subsequent persists deterministically fail.
+        try FileManager.default.removeItem(at: storeURL)
+        try FileManager.default.createDirectory(at: storeURL, withIntermediateDirectories: false)
+
+        let uniquePB = NSPasteboard.withUniqueName()
+        defer { uniquePB.releaseGlobally() }
+        uniquePB.clearContents()
+        uniquePB.setString("sentinel-unchanged", forType: .string)
+
+        // 1. Delete fails honestly, restores snapshot, and retains PNG asset.
+        XCTAssertFalse(store.delete(id: item1.id))
+        XCTAssertEqual(store.list().count, 5)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: asset1Path))
+
+        // 2. Clear fails honestly, restores snapshot, and retains both PNG assets.
+        XCTAssertFalse(store.clear())
+        XCTAssertEqual(store.list().count, 5)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: asset1Path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: asset5Path))
+
+        // 3. Text ingest that would evict item1 must fail, restore item1, and retain asset1 on disk.
+        XCTAssertEqual(store.ingest("overflow-triggers-trim"), .persistenceFailed)
+        XCTAssertEqual(store.list().last?.id, item1.id)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: asset1Path))
+
+        // 4. Duplicate ingestImage must fail honestly instead of returning bumpedExisting.
+        XCTAssertEqual(store.ingestImage(img1), .persistenceFailed)
+        XCTAssertEqual(store.list().map(\.id), [item5.id, "clip-4", "clip-3", "clip-2", item1.id])
+
+        // 5. Explicit agent text & image writes fail honestly without mutating NSPasteboard.
+        if case .failure(.persistenceFailed) = SystemPasteboardWriter.performAgentWrite(
+            text: "should-not-write",
+            store: store,
+            operation: .writeClip,
+            pasteboard: uniquePB
+        ) {
+            // expected
+        } else {
+            XCTFail("Expected .persistenceFailed for performAgentWrite")
+        }
+
+        let tempImgFile = dir.appendingPathComponent("input.png")
+        try img1.write(to: tempImgFile)
+        if case .failure(.persistenceFailed) = SystemPasteboardWriter.performAgentImageWrite(
+            filePath: tempImgFile.path,
+            store: store,
+            operation: .writeImage,
+            pasteboard: uniquePB
+        ) {
+            // expected
+        } else {
+            XCTFail("Expected .persistenceFailed for performAgentImageWrite")
+        }
+
+        XCTAssertEqual(uniquePB.string(forType: .string), "sentinel-unchanged")
+        XCTAssertEqual(store.list().count, 5)
+        XCTAssertNotNil(store.imageAssets.readPNGData(for: meta1))
+    }
+
+    func testAssetReadEnforcesPreReadSizeLimitAndCanonicalSHAVerification() throws {
+        let url = makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = ClipStore(fileURL: url)
+
+        let img = try makeSyntheticImageData(width: 28, height: 28, uti: UTType.png.identifier as CFString)
+        guard case .inserted(let item) = store.ingestImage(img), let meta = item.image else {
+            return XCTFail("Expected image ingest")
+        }
+        let assetURL = try XCTUnwrap(store.imageAssets.resolveAssetURL(for: meta))
+        XCTAssertNotNil(store.imageAssets.readPNGData(for: meta))
+
+        // Corrupt bytes -> SHA-256 verification rejects asset read
+        try Data("corrupted-png-bytes".utf8).write(to: assetURL, options: [.atomic])
+        XCTAssertNil(store.imageAssets.readPNGData(for: meta))
     }
 }

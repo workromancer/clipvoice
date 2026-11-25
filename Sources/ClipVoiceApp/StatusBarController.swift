@@ -9,6 +9,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let isHUDVisible: () -> Bool
     private let onToggleHUD: () -> Void
     private let onShowSetup: () -> Void
+    private let onResetWindow: () -> Void
     private let onQuit: () -> Void
 
     init(
@@ -16,6 +17,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         isHUDVisible: @escaping () -> Bool,
         onToggleHUD: @escaping () -> Void,
         onShowSetup: @escaping () -> Void,
+        onResetWindow: @escaping () -> Void,
         onQuit: @escaping () -> Void
     ) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -23,6 +25,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         self.isHUDVisible = isHUDVisible
         self.onToggleHUD = onToggleHUD
         self.onShowSetup = onShowSetup
+        self.onResetWindow = onResetWindow
         self.onQuit = onQuit
         super.init()
 
@@ -86,6 +89,30 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         setupItem.target = self
         menu.addItem(setupItem)
 
+        let placementMenu = NSMenu()
+        let leftItem = NSMenuItem(title: L10n.tr("placement.left"), action: #selector(handleDockLeft), keyEquivalent: "")
+        leftItem.target = self
+        leftItem.state = viewModel.placementMode == .dockLeft ? .on : .off
+        placementMenu.addItem(leftItem)
+
+        let floatItem = NSMenuItem(title: L10n.tr("placement.floating"), action: #selector(handleDockFloating), keyEquivalent: "")
+        floatItem.target = self
+        floatItem.state = viewModel.placementMode == .floating ? .on : .off
+        placementMenu.addItem(floatItem)
+
+        let rightItem = NSMenuItem(title: L10n.tr("placement.right"), action: #selector(handleDockRight), keyEquivalent: "")
+        rightItem.target = self
+        rightItem.state = viewModel.placementMode == .dockRight ? .on : .off
+        placementMenu.addItem(rightItem)
+
+        let placementParent = NSMenuItem(title: L10n.tr("display.title"), action: nil, keyEquivalent: "")
+        placementParent.submenu = placementMenu
+        menu.addItem(placementParent)
+
+        let resetWindowItem = NSMenuItem(title: L10n.tr("display.reset_menu"), action: #selector(handleResetWindow), keyEquivalent: "")
+        resetWindowItem.target = self
+        menu.addItem(resetWindowItem)
+
         let clearItem = NSMenuItem(title: L10n.tr("action.clear"), action: #selector(handleClear), keyEquivalent: "")
         clearItem.target = self
         clearItem.isEnabled = !viewModel.allItems.isEmpty
@@ -117,6 +144,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func handleShowSetup() {
         onShowSetup()
+    }
+
+    @objc private func handleResetWindow() {
+        onResetWindow()
+    }
+
+    @objc private func handleDockLeft() {
+        viewModel.setPlacementMode(.dockLeft)
+    }
+
+    @objc private func handleDockFloating() {
+        viewModel.setPlacementMode(.floating)
+    }
+
+    @objc private func handleDockRight() {
+        viewModel.setPlacementMode(.dockRight)
     }
 
     @objc private func handleClear() {
